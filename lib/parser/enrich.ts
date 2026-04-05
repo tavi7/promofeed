@@ -1,9 +1,24 @@
 // lib/parser/enrich.ts
 import Anthropic from "@anthropic-ai/sdk";
 import type { ExtractedEmail } from "./extract";
-import type { ParsedPromotion } from "../types";
+import type { ParsedPromotion, RawImage, PromotionImage } from "../types";
 
 const client = new Anthropic();
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+// Claude occasionally wraps JSON in ```json fences despite instructions — strip them
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseJSON(raw: string): any {
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  return JSON.parse(cleaned);
+}
+
+// ─── Text enrichment ───────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are a promotions data extractor. 
 Given the text of a marketing email, extract structured data and return ONLY valid JSON.
@@ -22,7 +37,7 @@ ${email.cleanText}
 
 Return a JSON object with exactly these fields:
 {
-  "title": "short punchy headline for the promotion (max 10 words)",
+  "title": "short punchy headline for the promotion (max 10 words). NEVER null — if no clear offer, summarise the email topic instead",
   "description": "one sentence describing what the offer is",
   "discount_text": "the discount expressed simply e.g. '30% off', '$20 off orders over $100', or null if no clear discount",
   "promo_code": "the promo code if present e.g. 'SUMMER25', or null",
@@ -46,23 +61,119 @@ export async function enrichWithClaude(
     const raw = response.content[0];
     if (raw.type !== "text") return null;
 
-    const parsed = JSON.parse(raw.text);
+    const parsed = parseJSON(raw.text);
+
+    // title is NOT NULL in DB — fallback to subject if Claude returns null
+    const title =
+      (parsed.title as string | null) ||
+      email.subject.slice(0, 60) ||
+      email.brandName;
 
     return {
       source_email_id: email.emailId,
       brand_name: email.brandName,
       brand_domain: email.brandDomain,
-      title: parsed.title,
-      description: parsed.description,
-      discount_text: parsed.discount_text,
-      promo_code: parsed.promo_code,
-      category: parsed.category,
-      expiry_date: parsed.expiry_date,
-      relevance_score: parsed.relevance_score,
+      title,
+      description: (parsed.description as string) ?? "",
+      discount_text: (parsed.discount_text as string | null) ?? null,
+      promo_code: (parsed.promo_code as string | null) ?? null,
+      category: (parsed.category as string) ?? "other",
+      expiry_date: (parsed.expiry_date as string | null) ?? null,
+      relevance_score: (parsed.relevance_score as number) ?? 1,
       raw_text: email.cleanText,
     };
   } catch (err) {
     console.error(`Enrichment failed for ${email.brandName}:`, err);
     return null;
   }
+}
+
+// ─── Image enrichment ──────────────────────────────────────────────────────
+
+const IMAGE_SYSTEM_PROMPT = `You are a promotional image analyzer.
+Given an image from a marketing email, extract structured data and return ONLY valid JSON.
+No explanation, no markdown, no code fences. Just the raw JSON object.`;
+
+function buildImagePrompt(): string {
+  return `Analyze this promotional email image.
+
+Return a JSON object with exactly these fields:
+{
+  "description": "one sentence describing what's in the image (max 20 words)",
+  "tags": ["tag1", "tag2"],
+  "has_text": true or false,
+  "extracted_text": "any promo codes, prices, discount percentages, or headlines visible in the image, or null"
+}
+
+For "tags", choose any that apply (use exact strings):
+hero_banner, product_shot, lifestyle_photo, logo, discount_text, promo_code,
+seasonal, sale, new_arrival, apparel, electronics, food, beauty, home, travel,
+model_wearing, flat_lay, infographic`;
+}
+
+export async function enrichImagesWithClaude(
+  promotionId: string,
+  images: Array<RawImage & {
+    storage_path: string;
+    public_url: string;
+    mime_type: string;
+    file_size_bytes: number;
+    width: number;
+    height: number;
+  }>
+): Promise<PromotionImage[]> {
+  const results: PromotionImage[] = [];
+
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+
+    try {
+      const response = await client.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 300,
+        system: IMAGE_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "url", url: img.public_url },
+              },
+              {
+                type: "text",
+                text: buildImagePrompt(),
+              },
+            ],
+          },
+        ],
+      });
+
+      const raw = response.content[0];
+      const parsed = raw.type === "text"
+        ? parseJSON(raw.text)
+        : {};
+
+      results.push({
+        promotion_id: promotionId,
+        original_url: img.originalUrl,
+        storage_path: img.storage_path,
+        public_url: img.public_url,
+        role: img.role,
+        width: img.width,
+        height: img.height,
+        mime_type: img.mime_type,
+        file_size_bytes: img.file_size_bytes,
+        sort_order: i,
+        ai_description: parsed.description ?? "",
+        ai_tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+        has_text: Boolean(parsed.has_text),
+        extracted_text: parsed.extracted_text ?? null,
+      });
+    } catch (err) {
+      console.error(`Image enrichment failed for ${img.public_url}:`, err);
+    }
+  }
+
+  return results;
 }

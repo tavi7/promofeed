@@ -1,24 +1,36 @@
 // lib/supabase/insert.ts
 import { supabase } from "./client";
-import type { ParsedPromotion } from "../types";
+import type { ParsedPromotion, PromotionImage } from "../types";
 
 export async function insertPromotion(
   promo: ParsedPromotion
-): Promise<{ inserted: boolean; reason?: string }> {
-  // Dedup: source_email_id is UNIQUE in the schema — this handles exact dupes
-  const { error } = await supabase
+): Promise<{ inserted: boolean; id?: string; reason?: string }> {
+  const { data, error } = await supabase
     .from("promotions")
     .insert(promo)
-    .select()
+    .select("id")
     .single();
 
   if (error) {
     if (error.code === "23505") {
-      // Postgres unique violation — already processed this email
       return { inserted: false, reason: "duplicate" };
     }
     throw error;
   }
 
-  return { inserted: true };
+  return { inserted: true, id: data.id };
+}
+
+export async function insertPromotionImages(
+  images: PromotionImage[]
+): Promise<{ inserted: number }> {
+  if (images.length === 0) return { inserted: 0 };
+
+  const { error } = await supabase
+    .from("promotion_images")
+    .upsert(images, { onConflict: "promotion_id, storage_path" });
+
+  if (error) throw error;
+
+  return { inserted: images.length };
 }
