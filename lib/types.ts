@@ -21,6 +21,9 @@ export interface ParsedPromotion {
   category: string;
   expiry_date: string | null;
   relevance_score: number;
+  // The primary CTA link extracted from the email HTML.
+  // Null when no unambiguous click-through URL could be found.
+  click_url: string | null;
   raw_text: string;
 }
 

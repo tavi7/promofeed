@@ -80,6 +80,9 @@ export async function enrichWithClaude(
       category: (parsed.category as string) ?? "other",
       expiry_date: (parsed.expiry_date as string | null) ?? null,
       relevance_score: (parsed.relevance_score as number) ?? 1,
+      // click_url comes from HTML extraction, not Claude — Claude only sees
+      // clean text and cannot reliably reconstruct URLs from it.
+      click_url: email.clickUrl,
       raw_text: email.cleanText,
     };
   } catch (err) {
@@ -150,9 +153,7 @@ export async function enrichImagesWithClaude(
       });
 
       const raw = response.content[0];
-      const parsed = raw.type === "text"
-        ? parseJSON(raw.text)
-        : {};
+      const parsed = raw.type === "text" ? parseJSON(raw.text) : {};
 
       results.push({
         promotion_id: promotionId,
@@ -167,11 +168,11 @@ export async function enrichImagesWithClaude(
         sort_order: i,
         ai_description: parsed.description ?? "",
         ai_tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-        has_text: Boolean(parsed.has_text),
+        has_text: parsed.has_text ?? false,
         extracted_text: parsed.extracted_text ?? null,
       });
     } catch (err) {
-      console.error(`Image enrichment failed for ${img.public_url}:`, err);
+      console.error(`Image enrichment failed for ${img.originalUrl}:`, err);
     }
   }
 

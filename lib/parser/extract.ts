@@ -2,17 +2,6 @@
 import * as cheerio from "cheerio";
 import type { RawEmail, RawImage } from "../types";
 
-// ─── Promo text patterns ───────────────────────────────────────────────────
-
-const DISCOUNT_PATTERNS = [
-  /\d+%\s*off/gi,
-  /save\s+\$?\d+/gi,
-  /\$\d+\s*off/gi,
-  /free\s+shipping/gi,
-  /buy\s+\d+\s+get\s+\d+/gi,
-  /[A-Z0-9]{4,12}/g,
-];
-
 // ─── Brand helpers ─────────────────────────────────────────────────────────
 
 function extractBrandDomain(from: string): string {
@@ -44,6 +33,111 @@ function htmlToCleanText(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, 3000);
+}
+
+// ─── Click URL extraction ──────────────────────────────────────────────────
+//
+// Strategy: find the most prominent CTA link in the email HTML.
+// We rank <a> tags by a set of signals and return the best candidate.
+// Tracking redirects (e.g. click.mailchimp.com) are intentionally kept as-is
+// because they are the actual click-through URLs brands use; resolving them
+// would require outbound HTTP requests during parsing.
+
+const SKIP_HREF_PATTERNS = [
+  /^mailto:/i,
+  /^#/,
+  /unsubscribe/i,
+  /optout/i,
+  /opt-out/i,
+  /preferences/i,
+  /manage.*email/i,
+  /privacy.*policy/i,
+  /terms.*service/i,
+  /^https?:\/\/(www\.)?facebook\.com/i,
+  /^https?:\/\/(www\.)?twitter\.com/i,
+  /^https?:\/\/(www\.)?instagram\.com/i,
+  /^https?:\/\/(www\.)?linkedin\.com/i,
+];
+
+const CTA_TEXT_SIGNALS = [
+  /shop\s*now/i,
+  /buy\s*now/i,
+  /order\s*now/i,
+  /get\s*(the\s*)?deal/i,
+  /claim\s*(your\s*)?offer/i,
+  /view\s*(the\s*)?offer/i,
+  /see\s*(the\s*)?deal/i,
+  /explore\s*now/i,
+  /learn\s*more/i,
+  /get\s*started/i,
+  /redeem/i,
+  /save\s*now/i,
+  /grab\s*(the\s*)?deal/i,
+];
+
+function scoreAnchor($el: cheerio.Cheerio<cheerio.Element>, $: cheerio.CheerioAPI): number {
+  let score = 0;
+  const text = ($el.text() || "").trim();
+  const href = $el.attr("href") || "";
+
+  // CTA language in link text is the strongest signal
+  if (CTA_TEXT_SIGNALS.some((re) => re.test(text))) score += 10;
+
+  // Button-like styling
+  const style = ($el.attr("style") || "").toLowerCase();
+  const cls = ($el.attr("class") || "").toLowerCase();
+  if (
+    style.includes("background") ||
+    style.includes("background-color") ||
+    cls.includes("btn") ||
+    cls.includes("button") ||
+    cls.includes("cta")
+  ) {
+    score += 5;
+  }
+
+  // Parent is a <td> styled as a button (common email pattern)
+  const parent = $el.parent();
+  const parentStyle = (parent.attr("style") || "").toLowerCase();
+  if (parentStyle.includes("background") || parentStyle.includes("background-color")) {
+    score += 3;
+  }
+
+  // Link wraps an image (hero CTA)
+  if ($el.find("img").length > 0) score += 2;
+
+  // Penalise very short or very long link text (nav links, footer links)
+  if (text.length < 3 || text.length > 80) score -= 3;
+
+  // Slight preference for links pointing to the brand's own domain
+  // (already filtered by SKIP_HREF_PATTERNS above, so this is a bonus)
+  if (href.length > 0) score += 1;
+
+  return score;
+}
+
+function extractClickUrl(html: string): string | null {
+  if (!html) return null;
+
+  const $ = cheerio.load(html);
+  let bestHref: string | null = null;
+  let bestScore = -Infinity;
+
+  $("a[href]").each((_i, el) => {
+    const href = $(el).attr("href") || "";
+
+    if (!href.startsWith("http")) return;
+    if (SKIP_HREF_PATTERNS.some((re) => re.test(href))) return;
+
+    const score = scoreAnchor($(el), $);
+    if (score > bestScore) {
+      bestScore = score;
+      bestHref = href;
+    }
+  });
+
+  // Only return if we found at least a basic positive score
+  return bestScore > 0 ? bestHref : null;
 }
 
 // ─── Image extraction ──────────────────────────────────────────────────────
@@ -152,6 +246,7 @@ export interface ExtractedEmail {
   subject: string;
   cleanText: string;
   date: string;
+  clickUrl: string | null;
   rawImages: RawImage[];
 }
 
@@ -161,8 +256,9 @@ export function extractFromEmail(email: RawEmail): ExtractedEmail {
 
   const source = email.htmlBody || email.textBody;
 
-  // Extract images BEFORE htmlToCleanText strips <img> tags
+  // Extract images and click URL BEFORE htmlToCleanText strips tags
   const rawImages = extractImages(source);
+  const clickUrl = extractClickUrl(source);
   const cleanText = htmlToCleanText(source);
 
   return {
@@ -172,6 +268,7 @@ export function extractFromEmail(email: RawEmail): ExtractedEmail {
     subject: email.subject,
     cleanText,
     date: email.date,
+    clickUrl,
     rawImages,
   };
 }
