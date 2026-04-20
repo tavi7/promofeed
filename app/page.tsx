@@ -116,9 +116,9 @@ function PromotionCard({
       href={promo.click_url ?? `https://${rootDomain(promo.brand_domain)}`}
       target="_blank"
       rel="noopener noreferrer"
-      className={`block border-b border-zinc-100 dark:border-zinc-800 px-4 py-4 transition-colors ${
-        isRead ? "opacity-60" : ""
-      } hover:bg-zinc-50 dark:hover:bg-zinc-900/40`}
+      className={`block border-b border-zinc-100 dark:border-zinc-800 px-4 py-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/40 border-l-2 ${
+        isRead ? "border-l-transparent" : "border-l-blue-400 dark:border-l-blue-500"
+      }`}
     >
       {/* Header: logo + brand + time + source badge */}
       <div className="flex items-center gap-3 mb-2">
