@@ -1,5 +1,6 @@
 // lib/parser/extract.ts
 import * as cheerio from "cheerio";
+import type { AnyNode } from "domhandler";
 import type { RawEmail, RawImage } from "../types";
 
 // ─── Brand helpers ─────────────────────────────────────────────────────────
@@ -36,12 +37,6 @@ function htmlToCleanText(html: string): string {
 }
 
 // ─── Click URL extraction ──────────────────────────────────────────────────
-//
-// Strategy: find the most prominent CTA link in the email HTML.
-// We rank <a> tags by a set of signals and return the best candidate.
-// Tracking redirects (e.g. click.mailchimp.com) are intentionally kept as-is
-// because they are the actual click-through URLs brands use; resolving them
-// would require outbound HTTP requests during parsing.
 
 const SKIP_HREF_PATTERNS = [
   /^mailto:/i,
@@ -75,15 +70,13 @@ const CTA_TEXT_SIGNALS = [
   /grab\s*(the\s*)?deal/i,
 ];
 
-function scoreAnchor($el: cheerio.Cheerio<cheerio.Element>, $: cheerio.CheerioAPI): number {
+function scoreAnchor($el: cheerio.Cheerio<AnyNode>, $: cheerio.CheerioAPI): number {
   let score = 0;
   const text = ($el.text() || "").trim();
   const href = $el.attr("href") || "";
 
-  // CTA language in link text is the strongest signal
   if (CTA_TEXT_SIGNALS.some((re) => re.test(text))) score += 10;
 
-  // Button-like styling
   const style = ($el.attr("style") || "").toLowerCase();
   const cls = ($el.attr("class") || "").toLowerCase();
   if (
@@ -96,21 +89,16 @@ function scoreAnchor($el: cheerio.Cheerio<cheerio.Element>, $: cheerio.CheerioAP
     score += 5;
   }
 
-  // Parent is a <td> styled as a button (common email pattern)
   const parent = $el.parent();
   const parentStyle = (parent.attr("style") || "").toLowerCase();
   if (parentStyle.includes("background") || parentStyle.includes("background-color")) {
     score += 3;
   }
 
-  // Link wraps an image (hero CTA)
   if ($el.find("img").length > 0) score += 2;
 
-  // Penalise very short or very long link text (nav links, footer links)
   if (text.length < 3 || text.length > 80) score -= 3;
 
-  // Slight preference for links pointing to the brand's own domain
-  // (already filtered by SKIP_HREF_PATTERNS above, so this is a bonus)
   if (href.length > 0) score += 1;
 
   return score;
@@ -124,19 +112,19 @@ function extractClickUrl(html: string): string | null {
   let bestScore = -Infinity;
 
   $("a[href]").each((_i, el) => {
-    const href = $(el).attr("href") || "";
+    const $el = $(el);
+    const href = $el.attr("href") || "";
 
     if (!href.startsWith("http")) return;
     if (SKIP_HREF_PATTERNS.some((re) => re.test(href))) return;
 
-    const score = scoreAnchor($(el), $);
+    const score = scoreAnchor($el, $);
     if (score > bestScore) {
       bestScore = score;
       bestHref = href;
     }
   });
 
-  // Only return if we found at least a basic positive score
   return bestScore > 0 ? bestHref : null;
 }
 
