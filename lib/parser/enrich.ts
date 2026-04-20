@@ -7,15 +7,17 @@ const client = new Anthropic();
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-// Claude occasionally wraps JSON in ```json fences despite instructions — strip them
+// Extract the first complete JSON object from Claude's response.
+// Handles fences, preamble text, and trailing commentary — much more robust
+// than stripping fences, and survives partial truncation at the end.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseJSON(raw: string): any {
-  const cleaned = raw
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  return JSON.parse(cleaned);
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new SyntaxError(`No JSON object found in response: ${raw.slice(0, 100)}`);
+  }
+  return JSON.parse(raw.slice(start, end + 1));
 }
 
 // ─── Shared Claude call ────────────────────────────────────────────────────
