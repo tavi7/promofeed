@@ -125,7 +125,9 @@ ${JSON_SHAPE}`;
       item.brandName;
 
     return {
-      source_email_id: `web_${item.brandDomain}_${Date.now()}`,
+      // Hash the raw text to get a stable, unique ID per item — avoids
+      // duplicate key violations when multiple items are processed in the same ms
+      source_email_id: `web_${item.brandDomain}_${Buffer.from(item.rawText.slice(0, 200)).toString("base64").slice(0, 32)}`,
       brand_name: item.brandName,
       brand_domain: item.brandDomain,
       title,

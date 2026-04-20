@@ -24,6 +24,8 @@ export interface ParsedPromotion {
   raw_text: string;
   // "email" = Gmail pipeline  |  "web" = scraper pipeline
   source: "email" | "web";
+  // Destination URL when card is clicked — scrape page URL for web, null for email
+  click_url: string | null;
 }
 
 // Raw image extracted from email HTML before any processing
