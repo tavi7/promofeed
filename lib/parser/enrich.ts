@@ -86,6 +86,7 @@ ${JSON_SHAPE}`;
       relevance_score: (parsed.relevance_score as number) ?? 1,
       raw_text: email.cleanText,
       source: "email",
+      click_url: null,
     };
   } catch (err) {
     console.error(`Enrichment failed for ${email.brandName}:`, err);
@@ -99,6 +100,7 @@ export interface ScrapedItem {
   brandName: string;
   brandDomain: string;
   rawText: string; // scraped text of the sale item
+  clickUrl: string; // the page URL this item was scraped from
 }
 
 export async function enrichScrapedItem(
@@ -139,6 +141,7 @@ ${JSON_SHAPE}`;
       relevance_score: (parsed.relevance_score as number) ?? 1,
       raw_text: item.rawText.slice(0, 3000),
       source: "web",
+      click_url: item.clickUrl,
     };
   } catch (err) {
     console.error(`Web enrichment failed for ${item.brandDomain}:`, err);

@@ -93,12 +93,21 @@ function PromotionCard({
     if (isRead) return;
     const el = ref.current;
     if (!el) return;
+    let timer: ReturnType<typeof setTimeout>;
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) onRead(promo.id); },
-      { threshold: 0.5 }
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          // Only mark read after 2s of continuous visibility —
+          // prevents initial render from graying out the whole feed
+          timer = setTimeout(() => onRead(promo.id), 2000);
+        } else {
+          clearTimeout(timer);
+        }
+      },
+      { threshold: 0.8 }
     );
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); clearTimeout(timer); };
   }, [isRead, promo.id, onRead]);
 
   return (

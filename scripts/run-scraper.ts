@@ -152,6 +152,7 @@ async function main() {
           brandName: target.brandName,
           brandDomain: target.brandDomain,
           rawText,
+          clickUrl: target.url,
         };
 
         const enriched = await enrichScrapedItem(item);
