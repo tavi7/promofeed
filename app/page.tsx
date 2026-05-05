@@ -22,6 +22,8 @@ interface Promotion {
   click_url: string | null;
 }
 
+type FilterSource = "all" | "email" | "web";
+
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 20;
@@ -30,18 +32,15 @@ const READ_STORAGE_KEY = "promofeed_read";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-// Known two-part ccTLD second levels — add more as needed
 const CC_TLDS = new Set(["co", "com", "org", "net", "gov", "ac", "edu"]);
 
-// Strip subdomains while correctly handling ccTLDs:
-// "mail.hm.com" → "hm.com"
-// "newsletters.terminal-x.co.il" → "terminal-x.co.il"
-// "email.nike.com" → "nike.com"
 function rootDomain(domain: string): string {
   const parts = domain.split(".");
   if (parts.length <= 2) return domain;
-  // Check if the second-to-last part is a known ccTLD second level (e.g. "co" in "co.il")
-  const isCcTld = parts.length >= 3 && CC_TLDS.has(parts[parts.length - 2]) && parts[parts.length - 1].length === 2;
+  const isCcTld =
+    parts.length >= 3 &&
+    CC_TLDS.has(parts[parts.length - 2]) &&
+    parts[parts.length - 1].length === 2;
   return isCcTld ? parts.slice(-3).join(".") : parts.slice(-2).join(".");
 }
 
@@ -73,18 +72,126 @@ function markRead(id: string) {
   } catch {}
 }
 
+// ─── Icons ─────────────────────────────────────────────────────────────────
+
+function IconFeed({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <path d="M4 6h16M4 12h16M4 18h10" />
+    </svg>
+  );
+}
+
+function IconEmail({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </svg>
+  );
+}
+
+function IconWeb({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+function IconBookmark({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth={active ? 2.5 : 1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
+    </svg>
+  );
+}
+
+function IconSettings({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+// ─── Sidebar ───────────────────────────────────────────────────────────────
+
+interface NavItem {
+  id: string;
+  label: string;
+  icon: (active: boolean) => React.ReactNode;
+  filter?: FilterSource;
+}
+
+const NAV_ITEMS: NavItem[] = [
+  { id: "all",       label: "All Deals",  icon: (a) => <IconFeed active={a} />,     filter: "all" },
+  { id: "email",     label: "Emails",     icon: (a) => <IconEmail active={a} />,    filter: "email" },
+  { id: "web",       label: "Web Deals",  icon: (a) => <IconWeb active={a} />,      filter: "web" },
+  { id: "bookmarks", label: "Saved",      icon: (a) => <IconBookmark active={a} /> },
+  { id: "settings",  label: "Settings",   icon: (a) => <IconSettings active={a} /> },
+];
+
+function Sidebar({ active, onSelect }: { active: string; onSelect: (item: NavItem) => void }) {
+  return (
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden sm:flex flex-col fixed top-0 left-0 h-full w-16 bg-white dark:bg-zinc-950 border-r border-zinc-100 dark:border-zinc-800/60 z-20 py-4 items-center gap-1">
+        <div className="mb-4 w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center flex-shrink-0">
+          <span className="text-white font-black text-sm tracking-tighter">P</span>
+        </div>
+        <div className="flex flex-col gap-1 w-full px-2">
+          {NAV_ITEMS.map((item) => {
+            const isActive = active === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => onSelect(item)}
+                title={item.label}
+                className={`relative flex flex-col items-center justify-center w-full py-2.5 rounded-lg transition-all group ${
+                  isActive
+                    ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400"
+                    : "text-zinc-400 dark:text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-900 hover:text-zinc-700 dark:hover:text-zinc-300"
+                }`}
+              >
+                {isActive && (
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-600 dark:bg-indigo-400 rounded-r" />
+                )}
+                {item.icon(isActive)}
+                <span className="text-[9px] mt-0.5 font-medium tracking-wide">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Mobile bottom nav */}
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-20 bg-white/95 dark:bg-zinc-950/95 backdrop-blur border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-around px-2 py-1">
+        {NAV_ITEMS.filter((i) => i.id !== "settings").map((item) => {
+          const isActive = active === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => onSelect(item)}
+              className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg transition-colors ${
+                isActive ? "text-indigo-600 dark:text-indigo-400" : "text-zinc-400 dark:text-zinc-500"
+              }`}
+            >
+              {item.icon(isActive)}
+              <span className="text-[9px] font-medium">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </>
+  );
+}
+
 // ─── Card ──────────────────────────────────────────────────────────────────
 
-function PromotionCard({
-  promo,
-  isRead,
-  onRead,
-}: {
-  promo: Promotion;
-  isRead: boolean;
-  onRead: (id: string) => void;
-}) {
-  // useRef<HTMLElement> works for both div and a elements in IntersectionObserver
+function PromotionCard({ promo, isRead, onRead }: { promo: Promotion; isRead: boolean; onRead: (id: string) => void }) {
   const ref = useRef<HTMLAnchorElement>(null);
   const [logoError, setLogoError] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -97,8 +204,6 @@ function PromotionCard({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          // Only mark read after 2s of continuous visibility —
-          // prevents initial render from graying out the whole feed
           timer = setTimeout(() => onRead(promo.id), 2000);
         } else {
           clearTimeout(timer);
@@ -110,101 +215,91 @@ function PromotionCard({
     return () => { observer.disconnect(); clearTimeout(timer); };
   }, [isRead, promo.id, onRead]);
 
+  const hasImage = !!promo.best_image_url && !imgError;
+
   return (
     <a
       ref={ref}
       href={promo.click_url ?? `https://${rootDomain(promo.brand_domain)}`}
       target="_blank"
       rel="noopener noreferrer"
-      className={`block border-b border-zinc-100 dark:border-zinc-800 px-4 py-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/40 border-l-2 ${
-        isRead ? "border-l-transparent" : "border-l-blue-400 dark:border-l-blue-500"
+      className={`group block border-b border-zinc-100 dark:border-zinc-800/60 px-5 py-4 transition-all hover:bg-zinc-50/80 dark:hover:bg-zinc-900/40 ${
+        !isRead ? "border-l-2 border-l-indigo-400 dark:border-l-indigo-500" : ""
       }`}
     >
-      {/* Header: logo + brand + time + source badge */}
-      <div className="flex items-center gap-3 mb-2">
-        <div className="flex-shrink-0 w-10 h-10 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+      {/* Header row */}
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center ring-1 ring-zinc-200 dark:ring-zinc-700">
           {!logoError ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logoUrl(promo.brand_domain)}
-              alt={promo.brand_name}
-              className="w-10 h-10 object-contain"
-              onError={() => setLogoError(true)}
-            />
+            <img src={logoUrl(promo.brand_domain)} alt={promo.brand_name} className="w-9 h-9 object-cover" onError={() => setLogoError(true)} />
           ) : (
-            <span className="text-sm font-bold text-zinc-500 dark:text-zinc-400 uppercase">
-              {promo.brand_name.charAt(0)}
-            </span>
+            <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase">{promo.brand_name.charAt(0)}</span>
           )}
         </div>
-
         <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate">
-              {promo.brand_name}
-            </span>
-            <span className="text-xs text-zinc-400 dark:text-zinc-500 flex-shrink-0">
-              {timeAgo(promo.created_at)}
-            </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">{promo.brand_name}</span>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">{timeAgo(promo.created_at)}</span>
             {promo.source === "web" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-medium flex-shrink-0">
-                web
-              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 font-semibold tracking-wide">WEB</span>
             )}
           </div>
         </div>
-
-        <div
-          className="flex-shrink-0 w-2 h-2 rounded-full"
-          style={{ backgroundColor: `hsl(${(promo.relevance_score - 1) * 12}, 70%, 50%)` }}
-          title={`Score: ${promo.relevance_score}/10`}
-        />
+        {!isRead && <div className="flex-shrink-0 w-2 h-2 rounded-full bg-indigo-500" />}
       </div>
 
-      {/* Body */}
-      <div className="pl-[52px]">
-        <p className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100 leading-snug mb-1">
-          {promo.title}
-        </p>
+      {/* Content */}
+      <div className="pl-12">
+        <p className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100 leading-snug mb-1">{promo.title}</p>
         {promo.description && (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed mb-2">
-            {promo.description}
-          </p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed mb-3 line-clamp-2">{promo.description}</p>
         )}
-
-        <div className="flex flex-wrap gap-2 mb-3">
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
           {promo.discount_text && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 font-medium">
-              {promo.discount_text}
-            </span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-semibold">{promo.discount_text}</span>
           )}
           {promo.promo_code && (
-            <span className="text-xs px-2 py-0.5 rounded font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 tracking-wider border border-dashed border-zinc-300 dark:border-zinc-600">
-              {promo.promo_code}
-            </span>
+            <span className="text-[11px] px-2 py-0.5 rounded font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 tracking-widest border border-dashed border-zinc-300 dark:border-zinc-600 uppercase">{promo.promo_code}</span>
           )}
           {promo.expiry_date && (
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">
-              until {new Date(promo.expiry_date).toLocaleDateString()}
-            </span>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">until {new Date(promo.expiry_date).toLocaleDateString()}</span>
           )}
-          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-            {promo.category}
-          </span>
+          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500">{promo.category}</span>
         </div>
-
-        {/* Best image — Twitter-style, below text */}
-        {promo.best_image_url && !imgError && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={promo.best_image_url}
-            alt={promo.title}
-            className="w-full max-h-80 object-contain rounded-2xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900"
-            onError={() => setImgError(true)}
-          />
+        {hasImage && (
+          <div className="relative w-full rounded-xl overflow-hidden border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900" style={{ paddingTop: "52%" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={promo.best_image_url!}
+              alt={promo.title}
+              className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+              onError={() => setImgError(true)}
+            />
+          </div>
         )}
       </div>
     </a>
+  );
+}
+
+// ─── Empty state ───────────────────────────────────────────────────────────
+
+function EmptyState({ filter }: { filter: FilterSource }) {
+  const messages: Record<FilterSource, { title: string; sub: string }> = {
+    all:   { title: "No promotions yet",  sub: "Run the pipeline to ingest emails and scrape deals." },
+    email: { title: "No email deals yet", sub: "Run the email pipeline to start ingesting promotions." },
+    web:   { title: "No web deals yet",   sub: "Run the scraper to pull deals from retail sites." },
+  };
+  const { title, sub } = messages[filter];
+  return (
+    <div className="flex flex-col items-center justify-center py-24 px-8 text-center">
+      <div className="w-12 h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mb-4">
+        <span className="text-2xl">🏷️</span>
+      </div>
+      <p className="text-zinc-700 dark:text-zinc-300 font-semibold mb-1">{title}</p>
+      <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-xs">{sub}</p>
+    </div>
   );
 }
 
@@ -216,71 +311,106 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [activeNav, setActiveNav] = useState<string>("all");
+  const [filter, setFilter] = useState<FilterSource>("all");
+
+  // Use refs for pagination state to avoid stale closures in callbacks
   const offsetRef = useRef(0);
-  // Track the newest promotion ID we've seen so polling only prepends new ones
+  const hasMoreRef = useRef(true);
+  const loadingMoreRef = useRef(false);
   const newestIdRef = useRef<string | null>(null);
+  // Keep filter in a ref so loadMore always reads the current value
+  const filterRef = useRef<FilterSource>("all");
 
-  const fetchPromotions = useCallback(async (offset: number, append = false) => {
-    try {
-      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=${offset}`);
-      const data = await res.json();
-      const incoming: Promotion[] = data.promotions ?? [];
+  // Sync filter ref whenever state changes
+  useEffect(() => { filterRef.current = filter; }, [filter]);
 
-      setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
-      setHasMore(incoming.length === PAGE_SIZE);
-      offsetRef.current = offset + incoming.length;
-      if (!append && incoming.length > 0) {
-        newestIdRef.current = incoming[0].id;
-      }
-    } catch (err) {
-      console.error("Fetch failed:", err);
-    }
+  const fetchPage = useCallback(async (offset: number, sourceFilter: FilterSource): Promise<Promotion[]> => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    const res = await fetch(`/api/promotions?${params}`);
+    const data = await res.json();
+    return data.promotions ?? [];
   }, []);
 
-  // Poll for new items only — prepend without disturbing scroll position
+  // Initial / filter-change load — resets all pagination state
+  const loadFresh = useCallback(async (sourceFilter: FilterSource) => {
+    setLoading(true);
+    setPromotions([]);
+    offsetRef.current = 0;
+    newestIdRef.current = null;
+    hasMoreRef.current = true;
+    setHasMore(true);
+
+    try {
+      const incoming = await fetchPage(0, sourceFilter);
+      setPromotions(incoming);
+      offsetRef.current = incoming.length;
+      hasMoreRef.current = incoming.length === PAGE_SIZE;
+      setHasMore(incoming.length === PAGE_SIZE);
+      if (incoming.length > 0) newestIdRef.current = incoming[0].id;
+    } catch (err) {
+      console.error("Fetch failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchPage]);
+
+  // Append next page — reads current filter from ref to avoid stale closure
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+
+    try {
+      const incoming = await fetchPage(offsetRef.current, filterRef.current);
+      setPromotions((prev) => [...prev, ...incoming]);
+      offsetRef.current += incoming.length;
+      hasMoreRef.current = incoming.length === PAGE_SIZE;
+      setHasMore(incoming.length === PAGE_SIZE);
+    } catch (err) {
+      console.error("loadMore failed:", err);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [fetchPage]);
+
+  // Poll for new items at the top
   const pollForNew = useCallback(async () => {
     if (!newestIdRef.current) return;
     try {
-      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=0`);
-      const data = await res.json();
-      const incoming: Promotion[] = data.promotions ?? [];
-      const newItems = incoming.filter((p) => p.id !== newestIdRef.current &&
-        // only items newer than our current newest
-        incoming.indexOf(p) < incoming.findIndex((x) => x.id === newestIdRef.current)
-      );
+      const incoming = await fetchPage(0, filterRef.current);
+      const cutIdx = incoming.findIndex((x) => x.id === newestIdRef.current);
+      const newItems = cutIdx > 0 ? incoming.slice(0, cutIdx) : [];
       if (newItems.length > 0) {
         setPromotions((prev) => [...newItems, ...prev]);
         newestIdRef.current = newItems[0].id;
         offsetRef.current += newItems.length;
       }
-    } catch (err) {
-      console.error("Poll failed:", err);
+    } catch {
+      // Polling failures are transient (server restart, network blip) — self-recover on next interval
     }
-  }, []);
+  }, [fetchPage]);
 
   // Initial load
   useEffect(() => {
     setRead(getRead());
-    fetchPromotions(0).finally(() => setLoading(false));
-  }, [fetchPromotions]);
+    loadFresh("all");
+  }, [loadFresh]);
 
-  // Polling — only prepends genuinely new items
+  // Re-fetch when filter changes (skip initial mount — handled above)
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    loadFresh(filter);
+  }, [filter, loadFresh]);
+
+  // Polling
   useEffect(() => {
     const id = setInterval(pollForNew, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [pollForNew]);
-
-  const handleRead = useCallback((id: string) => {
-    markRead(id);
-    setRead((prev) => new Set(prev).add(id));
-  }, []);
-
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    await fetchPromotions(offsetRef.current, true);
-    setLoadingMore(false);
-  }, [loadingMore, hasMore, fetchPromotions]);
 
   // Infinite scroll sentinel
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -295,48 +425,75 @@ export default function Home() {
     return () => observer.disconnect();
   }, [loadMore]);
 
+  const handleRead = useCallback((id: string) => {
+    markRead(id);
+    setRead((prev) => new Set(prev).add(id));
+  }, []);
+
+  const handleNavSelect = (item: NavItem) => {
+    setActiveNav(item.id);
+    if (item.filter) setFilter(item.filter);
+  };
+
+  const filterLabels: Record<FilterSource, string> = {
+    all: "All Deals",
+    email: "Email Deals",
+    web: "Web Deals",
+  };
+
   return (
-    <div className="min-h-screen bg-white dark:bg-black">
-      <header className="sticky top-0 z-10 bg-white/80 dark:bg-black/80 backdrop-blur border-b border-zinc-100 dark:border-zinc-800 px-4 py-3">
-        <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
-          PromoFeed
-        </h1>
-      </header>
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
+      <Sidebar active={activeNav} onSelect={handleNavSelect} />
 
-      <main className="max-w-xl mx-auto">
-        {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
-          </div>
-        ) : promotions.length === 0 ? (
-          <p className="text-center text-zinc-400 py-16 text-sm">No promotions yet.</p>
-        ) : (
-          <>
-            {promotions.map((p) => (
-              <PromotionCard
-                key={p.id}
-                promo={p}
-                isRead={read.has(p.id)}
-                onRead={handleRead}
-              />
-            ))}
-
-            <div ref={sentinelRef} className="h-8" />
-
-            {loadingMore && (
-              <div className="flex justify-center py-4">
-                <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
-              </div>
-            )}
-
-            {!hasMore && (
-              <p className="text-center text-zinc-400 py-6 text-xs">
-                You&apos;re all caught up
+      <div className="sm:ml-16">
+        {/* Sticky header */}
+        <header className="sticky top-0 z-10 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-md border-b border-zinc-100 dark:border-zinc-800/60 px-5 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="text-base font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
+              {filterLabels[filter]}
+            </h1>
+            {promotions.length > 0 && !loading && (
+              <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
+                {promotions.filter((p) => !read.has(p.id)).length} unread
               </p>
             )}
-          </>
-        )}
-      </main>
+          </div>
+          <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center sm:hidden">
+            <span className="text-white font-black text-xs">P</span>
+          </div>
+        </header>
+
+        {/* Feed */}
+        <main className="max-w-xl mx-auto">
+          {loading ? (
+            <div className="flex justify-center py-20">
+              <div className="w-6 h-6 border-2 border-zinc-200 dark:border-zinc-700 border-t-indigo-500 rounded-full animate-spin" />
+            </div>
+          ) : promotions.length === 0 ? (
+            <EmptyState filter={filter} />
+          ) : (
+            <>
+              {promotions.map((p) => (
+                <PromotionCard key={p.id} promo={p} isRead={read.has(p.id)} onRead={handleRead} />
+              ))}
+
+              <div ref={sentinelRef} className="h-8" />
+
+              {loadingMore && (
+                <div className="flex justify-center py-4">
+                  <div className="w-5 h-5 border-2 border-zinc-200 dark:border-zinc-700 border-t-indigo-500 rounded-full animate-spin" />
+                </div>
+              )}
+
+              {!hasMore && (
+                <p className="text-center text-zinc-400 dark:text-zinc-600 py-6 text-xs">
+                  You&apos;re all caught up ✓
+                </p>
+              )}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

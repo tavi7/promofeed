@@ -164,13 +164,27 @@ Return a JSON object with exactly these fields:
   "description": "one sentence describing what's in the image (max 20 words)",
   "tags": ["tag1", "tag2"],
   "has_text": true or false,
-  "extracted_text": "any promo codes, prices, discount percentages, or headlines visible in the image, or null"
+  "extracted_text": "any promo codes, prices, discount percentages, or headlines visible in the image, or null",
+  "show_in_feed": true or false
 }
 
 For "tags", choose any that apply (use exact strings):
 hero_banner, product_shot, lifestyle_photo, logo, discount_text, promo_code,
 seasonal, sale, new_arrival, apparel, electronics, food, beauty, home, travel,
-model_wearing, flat_lay, infographic`;
+model_wearing, flat_lay, infographic
+
+For "show_in_feed": set to TRUE only if the image clearly shows one or more of:
+- Clothing, apparel, or fashion items (worn by a model or as a flat lay)
+- A specific product (electronics, beauty item, shoes, bag, etc.)
+- A lifestyle photo featuring a product in use
+
+Set "show_in_feed" to FALSE if the image is:
+- A logo, wordmark, or brand icon
+- A generic banner with only text or decorative elements
+- A discount announcement graphic (e.g. "50% OFF" on a colored background)
+- A shipping/delivery notice
+- A decorative divider, spacer, or background element
+- Unclear or low quality`;
 
 export async function enrichImagesWithClaude(
   promotionId: string,
@@ -207,6 +221,16 @@ export async function enrichImagesWithClaude(
       const raw = response.content[0];
       const parsed = raw.type === "text" ? parseJSON(raw.text) : {};
 
+      // Encode show_in_feed as a tag so it's queryable without a schema change
+      const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags : [];
+      if (parsed.show_in_feed === true) {
+        tags.push("show_in_feed");
+      }
+
+      console.log(
+        `    ${parsed.show_in_feed ? "✓" : "✗"} ${img.role} image — ${parsed.description ?? "no description"}`
+      );
+
       results.push({
         promotion_id: promotionId,
         original_url: img.originalUrl,
@@ -219,7 +243,7 @@ export async function enrichImagesWithClaude(
         file_size_bytes: img.file_size_bytes,
         sort_order: i,
         ai_description: parsed.description ?? "",
-        ai_tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+        ai_tags: tags,
         has_text: Boolean(parsed.has_text),
         extracted_text: parsed.extracted_text ?? null,
       });

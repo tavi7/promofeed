@@ -4,7 +4,8 @@ import { supabase } from "./client";
 import type { RawImage } from "../types";
 
 const BUCKET = "promotions";
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB hard cap
+const MIN_IMAGE_BYTES = 2 * 1024;         // 2KB — anything smaller is a tracker/spacer
 const TIMEOUT_MS = 8000;
 
 export type UploadedImage = RawImage & {
@@ -36,7 +37,17 @@ async function fetchImageBuffer(
     if (!mimeType.startsWith("image/")) return null;
 
     const arrayBuffer = await res.arrayBuffer();
-    if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) return null;
+    const byteLength = arrayBuffer.byteLength;
+
+    if (byteLength > MAX_IMAGE_BYTES) {
+      console.warn(`  ✗ Skipping image (too large: ${byteLength}b): ${url.slice(0, 80)}`);
+      return null;
+    }
+
+    if (byteLength < MIN_IMAGE_BYTES) {
+      console.warn(`  ✗ Skipping image (too small: ${byteLength}b — likely tracker/spacer): ${url.slice(0, 80)}`);
+      return null;
+    }
 
     return { buffer: Buffer.from(arrayBuffer), mimeType };
   } catch {
@@ -55,7 +66,7 @@ export async function uploadImages(
 
     const fetched = await fetchImageBuffer(img.originalUrl);
     if (!fetched) {
-      console.warn(`Skipping image (fetch failed): ${img.originalUrl}`);
+      console.warn(`  Skipping image (fetch failed or filtered): ${img.originalUrl.slice(0, 80)}`);
       continue;
     }
 
@@ -70,6 +81,12 @@ export async function uploadImages(
       // fall back to HTML attributes
     }
 
+    // Skip degenerate dimensions even if file size passed — 1×1 PNGs can be >2KB
+    if (width > 0 && height > 0 && (width <= 10 || height <= 10)) {
+      console.warn(`  ✗ Skipping image (degenerate dimensions ${width}×${height}): ${img.originalUrl.slice(0, 80)}`);
+      continue;
+    }
+
     const ext = fetched.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg";
     const storage_path = `${promotionId}/${i}_${img.role}.${ext}`;
 
@@ -81,7 +98,7 @@ export async function uploadImages(
       });
 
     if (error) {
-      console.error(`Storage upload failed for ${storage_path}:`, error.message);
+      console.error(`  Storage upload failed for ${storage_path}:`, error.message);
       continue;
     }
 

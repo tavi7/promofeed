@@ -2,64 +2,91 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
-// Server-side only — service role key is never sent to the browser
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// product first — we want to show what's on sale, not a generic brand banner.
-// logo is excluded entirely — it's used for the avatar, not the card image.
 const ROLE_PRIORITY: Record<string, number> = {
   product: 0,
   hero:    1,
   banner:  2,
   other:   3,
-  logo:    99, // never shown as card image
+  logo:    99,
 };
+
+// 2KB minimum — same threshold as uploadImages.ts
+// Guards against trackers that slipped in before the upload filter was added
+const MIN_IMAGE_BYTES = 2 * 1024;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const limit = Math.min(parseInt(searchParams.get("limit") ?? "20"), 50);
+  const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "20"), 100);
   const offset = parseInt(searchParams.get("offset") ?? "0");
+  const source = searchParams.get("source"); // "email" | "web" | null (= all)
 
-  const { data: promotions, error } = await supabase
+  let query = supabase
     .from("promotions")
     .select("*")
     .order("relevance_score", { ascending: false })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
+  if (source === "email" || source === "web") {
+    query = query.eq("source", source);
+  }
+
+  const { data: promotions, error } = await query;
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!promotions?.length) return NextResponse.json({ promotions: [] });
 
-  // Fetch all images for this page in one query — no N+1
   const ids = promotions.map((p) => p.id);
   const { data: images } = await supabase
     .from("promotion_images")
-    .select("promotion_id, public_url, role, sort_order")
+    .select("promotion_id, public_url, role, sort_order, ai_tags, file_size_bytes")
     .in("promotion_id", ids);
 
-  // Pick the best image per promotion
-  const bestImage: Record<string, { url: string; priority: number; sort_order: number }> = {};
+  const bestImage: Record<string, string> = {};
+
   if (images) {
+    const byPromotion: Record<string, typeof images> = {};
     for (const img of images) {
-      const priority = ROLE_PRIORITY[img.role] ?? 5;
-      if (priority === 99) continue; // skip logos
-      const current = bestImage[img.promotion_id];
-      if (
-        !current ||
-        priority < current.priority ||
-        (priority === current.priority && img.sort_order < current.sort_order)
-      ) {
-        bestImage[img.promotion_id] = { url: img.public_url, priority, sort_order: img.sort_order };
-      }
+      if (!byPromotion[img.promotion_id]) byPromotion[img.promotion_id] = [];
+      byPromotion[img.promotion_id].push(img);
+    }
+
+    for (const [promoId, imgs] of Object.entries(byPromotion)) {
+      // Hard filter: no logos, no tiny images
+      const eligible = imgs.filter(
+        (img) =>
+          ROLE_PRIORITY[img.role] !== 99 &&
+          (img.file_size_bytes == null || img.file_size_bytes >= MIN_IMAGE_BYTES)
+      );
+
+      if (eligible.length === 0) continue;
+
+      // Prefer images Claude approved for the feed
+      const feedWorthy = eligible.filter(
+        (img) => Array.isArray(img.ai_tags) && img.ai_tags.includes("show_in_feed")
+      );
+
+      const candidates = feedWorthy.length > 0 ? feedWorthy : eligible;
+
+      candidates.sort((a, b) => {
+        const pa = ROLE_PRIORITY[a.role] ?? 5;
+        const pb = ROLE_PRIORITY[b.role] ?? 5;
+        if (pa !== pb) return pa - pb;
+        return a.sort_order - b.sort_order;
+      });
+
+      bestImage[promoId] = candidates[0].public_url;
     }
   }
 
   const result = promotions.map((p) => ({
     ...p,
-    best_image_url: bestImage[p.id]?.url ?? null,
+    best_image_url: bestImage[p.id] ?? null,
   }));
 
   return NextResponse.json({ promotions: result });
