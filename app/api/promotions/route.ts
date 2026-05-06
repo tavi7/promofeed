@@ -15,15 +15,83 @@ const ROLE_PRIORITY: Record<string, number> = {
   logo:    99,
 };
 
-// 2KB minimum — same threshold as uploadImages.ts
-// Guards against trackers that slipped in before the upload filter was added
-const MIN_IMAGE_BYTES = 2 * 1024;
+// ─── Image relevance ───────────────────────────────────────────────────────
+// Score how well an image matches its promotion's title/description/category.
+// Returns 0–1. Images scoring below RELEVANCE_THRESHOLD are rejected.
+
+const RELEVANCE_THRESHOLD = 0.15;
+
+// Keywords per category — used to sanity-check "lifestyle" images
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  fashion:       ["apparel", "clothing", "wear", "fashion", "outfit", "shirt", "dress", "jacket", "shoes", "bag", "model_wearing", "flat_lay"],
+  food:          ["food", "drink", "coffee", "tea", "wine", "beer", "meal", "restaurant", "eat", "beverage", "cup", "mug", "nespresso", "espresso", "capsule"],
+  tech:          ["tech", "phone", "laptop", "computer", "device", "gadget", "electronics", "screen", "cable", "headphone"],
+  travel:        ["travel", "hotel", "flight", "luggage", "destination", "beach", "city", "trip", "vacation"],
+  beauty:        ["beauty", "skincare", "makeup", "cosmetic", "hair", "fragrance", "perfume", "cream", "lotion"],
+  home:          ["home", "furniture", "decor", "kitchen", "bed", "sofa", "lamp", "rug", "pillow"],
+  sports:        ["sport", "fitness", "gym", "running", "yoga", "athletic", "exercise", "workout"],
+  entertainment: ["entertainment", "game", "movie", "music", "book", "show", "streaming"],
+  finance:       ["finance", "bank", "money", "card", "invest", "insurance"],
+};
+
+// Disqualifying tags — images with these are very unlikely to be relevant
+// to ANY promotion unless the category explicitly allows it
+const LIFESTYLE_TAGS = new Set(["lifestyle_photo"]);
+const DISQUALIFY_TAGS = new Set(["logo"]); // logos go in avatar, not card image
+
+function scoreImageRelevance(
+  img: { role: string; ai_description: string; ai_tags: string[] },
+  promo: { title: string; description: string; category: string; brand_name: string }
+): number {
+  let score = 0;
+
+  // Hard disqualify logos
+  if (DISQUALIFY_TAGS.has(img.role)) return 0;
+  if (img.ai_tags.includes("logo")) return 0;
+
+  // Role bonus — product shots are almost always relevant
+  if (img.role === "product") score += 0.4;
+  else if (img.role === "hero") score += 0.2;
+  else if (img.role === "banner") score += 0.1;
+
+  // Build a bag of words from promo context
+  const promoWords = [promo.title, promo.description, promo.brand_name, promo.category]
+    .join(" ")
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((w) => w.length > 2);
+
+  const imgText = (img.ai_description ?? "").toLowerCase();
+  const imgTags = img.ai_tags.map((t) => t.toLowerCase());
+
+  // Word overlap between promo text and image description
+  const descriptionMatches = promoWords.filter(
+    (w) => imgText.includes(w)
+  ).length;
+  score += Math.min(descriptionMatches * 0.1, 0.3);
+
+  // Category keyword matches in image tags or description
+  const catKeywords = CATEGORY_KEYWORDS[promo.category] ?? [];
+  const catMatches = catKeywords.filter(
+    (k) => imgText.includes(k) || imgTags.includes(k)
+  ).length;
+  score += Math.min(catMatches * 0.15, 0.3);
+
+  // Penalise pure lifestyle photos that have no category/promo keyword match
+  if (LIFESTYLE_TAGS.has(img.role) || imgTags.includes("lifestyle_photo")) {
+    if (catMatches === 0 && descriptionMatches === 0) {
+      score -= 0.4; // heavy penalty — wine photo on coffee promo, etc.
+    }
+  }
+
+  return score;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "20"), 100);
+  const limit  = Math.min(parseInt(searchParams.get("limit")  ?? "20"), 50);
   const offset = parseInt(searchParams.get("offset") ?? "0");
-  const source = searchParams.get("source"); // "email" | "web" | null (= all)
+  const source = searchParams.get("source"); // "email" | "web" | null
 
   let query = supabase
     .from("promotions")
@@ -44,49 +112,56 @@ export async function GET(request: Request) {
   const ids = promotions.map((p) => p.id);
   const { data: images } = await supabase
     .from("promotion_images")
-    .select("promotion_id, public_url, role, sort_order, ai_tags, file_size_bytes")
+    .select("promotion_id, public_url, role, sort_order, ai_description, ai_tags")
     .in("promotion_id", ids);
 
-  const bestImage: Record<string, string> = {};
+  // Pick best *relevant* image per promotion
+  const bestImage: Record<string, { url: string; priority: number; sort_order: number; relevance: number }> = {};
 
   if (images) {
-    const byPromotion: Record<string, typeof images> = {};
+    // Build a quick promo lookup
+    const promoMap = Object.fromEntries(promotions.map((p) => [p.id, p]));
+
     for (const img of images) {
-      if (!byPromotion[img.promotion_id]) byPromotion[img.promotion_id] = [];
-      byPromotion[img.promotion_id].push(img);
-    }
+      const priority = ROLE_PRIORITY[img.role] ?? 5;
+      if (priority === 99) continue; // skip logos entirely
 
-    for (const [promoId, imgs] of Object.entries(byPromotion)) {
-      // Hard filter: no logos, no tiny images
-      const eligible = imgs.filter(
-        (img) =>
-          ROLE_PRIORITY[img.role] !== 99 &&
-          (img.file_size_bytes == null || img.file_size_bytes >= MIN_IMAGE_BYTES)
+      const promo = promoMap[img.promotion_id];
+      if (!promo) continue;
+
+      const relevance = scoreImageRelevance(
+        {
+          role: img.role,
+          ai_description: img.ai_description ?? "",
+          ai_tags: Array.isArray(img.ai_tags) ? img.ai_tags : [],
+        },
+        {
+          title: promo.title ?? "",
+          description: promo.description ?? "",
+          category: promo.category ?? "other",
+          brand_name: promo.brand_name ?? "",
+        }
       );
 
-      if (eligible.length === 0) continue;
+      // Skip images that are clearly irrelevant
+      if (relevance < RELEVANCE_THRESHOLD) continue;
 
-      // Prefer images Claude approved for the feed
-      const feedWorthy = eligible.filter(
-        (img) => Array.isArray(img.ai_tags) && img.ai_tags.includes("show_in_feed")
-      );
-
-      const candidates = feedWorthy.length > 0 ? feedWorthy : eligible;
-
-      candidates.sort((a, b) => {
-        const pa = ROLE_PRIORITY[a.role] ?? 5;
-        const pb = ROLE_PRIORITY[b.role] ?? 5;
-        if (pa !== pb) return pa - pb;
-        return a.sort_order - b.sort_order;
-      });
-
-      bestImage[promoId] = candidates[0].public_url;
+      const current = bestImage[img.promotion_id];
+      if (
+        !current ||
+        // Prefer higher relevance first, then role priority as tiebreaker
+        relevance > current.relevance + 0.05 ||
+        (Math.abs(relevance - current.relevance) <= 0.05 && priority < current.priority) ||
+        (priority === current.priority && img.sort_order < current.sort_order)
+      ) {
+        bestImage[img.promotion_id] = { url: img.public_url, priority, sort_order: img.sort_order, relevance };
+      }
     }
   }
 
   const result = promotions.map((p) => ({
     ...p,
-    best_image_url: bestImage[p.id] ?? null,
+    best_image_url: bestImage[p.id]?.url ?? null,
   }));
 
   return NextResponse.json({ promotions: result });

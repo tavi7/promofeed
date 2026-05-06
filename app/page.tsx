@@ -28,15 +28,45 @@ const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 60_000;
 const READ_STORAGE_KEY = "promofeed_read";
 
+const NAV_ITEMS = [
+  {
+    key: "all",
+    label: "All",
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+        <path d="M2 4a1 1 0 011-1h14a1 1 0 010 2H3a1 1 0 01-1-1zm0 5a1 1 0 011-1h14a1 1 0 010 2H3a1 1 0 01-1-1zm0 5a1 1 0 011-1h14a1 1 0 010 2H3a1 1 0 01-1-1z" />
+      </svg>
+    ),
+  },
+  {
+    key: "email",
+    label: "Email",
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+        <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+        <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+      </svg>
+    ),
+  },
+  {
+    key: "web",
+    label: "Web",
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+        <path
+          fillRule="evenodd"
+          d="M4.083 9h1.946c.089-1.546.383-2.97.837-4.118A6.004 6.004 0 004.083 9zM10 2a8 8 0 100 16A8 8 0 0010 2zm0 2c-.076 0-.232.032-.465.262-.238.234-.497.623-.737 1.182-.389.907-.673 2.142-.766 3.556h3.936c-.093-1.414-.377-2.649-.766-3.556-.24-.56-.5-.948-.737-1.182C10.232 4.032 10.076 4 10 4zm3.971 5c-.089-1.546-.383-2.97-.837-4.118A6.004 6.004 0 0115.917 9h-1.946zm-2.003 2H8.032c.093 1.414.377 2.649.766 3.556.24.56.5.948.737 1.182.233.23.389.262.465.262.076 0 .232-.032.465-.262.238-.234.498-.623.737-1.182.389-.907.673-2.142.766-3.556zm1.166 4.118c.454-1.147.748-2.572.837-4.118h1.946a6.004 6.004 0 01-2.783 4.118zm-6.268 0C6.412 13.97 6.118 12.546 6.03 11H4.083a6.004 6.004 0 002.783 4.118z"
+          clipRule="evenodd"
+        />
+      </svg>
+    ),
+  },
+];
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-// Known two-part ccTLD second levels — add more as needed
 const CC_TLDS = new Set(["co", "com", "org", "net", "gov", "ac", "edu"]);
 
-// Strip subdomains while correctly handling ccTLDs:
-// "mail.hm.com" → "hm.com"
-// "newsletters.terminal-x.co.il" → "terminal-x.co.il"
-// "email.nike.com" → "nike.com"
 function rootDomain(domain: string): string {
   const parts = domain.split(".");
   if (parts.length <= 2) return domain;
@@ -75,6 +105,104 @@ function markRead(id: string) {
   } catch {}
 }
 
+// ─── Sidebar ───────────────────────────────────────────────────────────────
+
+function Sidebar({
+  activeFilter,
+  onFilter,
+  unreadCount,
+}: {
+  activeFilter: string;
+  onFilter: (f: string) => void;
+  unreadCount: number;
+}) {
+  return (
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden sm:flex flex-col fixed left-0 top-0 h-full w-56 border-r border-zinc-100 dark:border-zinc-800/60 bg-white dark:bg-zinc-950 z-20 py-6 px-3">
+        {/* Logo mark + wordmark */}
+        <div className="px-3 mb-8">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-zinc-900 dark:bg-white flex items-center justify-center flex-shrink-0">
+              <svg viewBox="0 0 16 16" fill="none" className="w-3.5 h-3.5">
+                <rect x="2" y="2" width="5" height="5" rx="1" fill="white" className="dark:fill-zinc-900" />
+                <rect x="9" y="2" width="5" height="5" rx="1" fill="white" className="dark:fill-zinc-900" />
+                <rect x="2" y="9" width="5" height="5" rx="1" fill="white" className="dark:fill-zinc-900" />
+                <circle cx="11.5" cy="11.5" r="2.5" fill="white" className="dark:fill-zinc-900" />
+              </svg>
+            </div>
+            <span className="font-bold text-[15px] tracking-tight text-zinc-900 dark:text-zinc-100">
+              PromoFeed
+            </span>
+          </div>
+        </div>
+
+        {/* Nav items */}
+        <nav className="flex flex-col gap-0.5 flex-1">
+          {NAV_ITEMS.map((item) => {
+            const active = activeFilter === item.key;
+            return (
+              <button
+                key={item.key}
+                onClick={() => onFilter(item.key)}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all w-full text-left group
+                  ${
+                    active
+                      ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 shadow-sm"
+                      : "text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/70 hover:text-zinc-900 dark:hover:text-zinc-100"
+                  }`}
+              >
+                <span className={`transition-opacity ${active ? "opacity-100" : "opacity-50 group-hover:opacity-80"}`}>
+                  {item.icon}
+                </span>
+                {item.label}
+                {item.key === "all" && unreadCount > 0 && (
+                  <span className={`ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums ${
+                    active ? "bg-white/20 text-white dark:bg-zinc-900/20 dark:text-zinc-900" : "bg-blue-500 text-white"
+                  }`}>
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Footer hint */}
+        <div className="px-3 pt-4 border-t border-zinc-100 dark:border-zinc-800">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <p className="text-[11px] text-zinc-400 dark:text-zinc-500">Live · updates every min</p>
+          </div>
+        </div>
+      </aside>
+
+      {/* Mobile bottom nav */}
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-20 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-t border-zinc-100 dark:border-zinc-800 flex safe-area-inset-bottom">
+        {NAV_ITEMS.map((item) => {
+          const active = activeFilter === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => onFilter(item.key)}
+              className={`flex-1 flex flex-col items-center gap-1 py-3 text-[10px] font-medium transition-colors relative
+                ${active ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500"}`}
+            >
+              <span className={`transition-all ${active ? "scale-110" : ""}`}>
+                {item.icon}
+              </span>
+              {item.label}
+              {item.key === "all" && unreadCount > 0 && !active && (
+                <span className="absolute top-2 right-[calc(50%-14px)] w-2 h-2 rounded-full bg-blue-500 border-2 border-white dark:border-zinc-950" />
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    </>
+  );
+}
+
 // ─── Card ──────────────────────────────────────────────────────────────────
 
 function PromotionCard({
@@ -98,8 +226,6 @@ function PromotionCard({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          // Only mark read after 2s of continuous visibility —
-          // prevents initial render from graying out the whole feed
           timer = setTimeout(() => onRead(promo.id), 2000);
         } else {
           clearTimeout(timer);
@@ -126,7 +252,7 @@ function PromotionCard({
           : "border-l-blue-400 dark:border-l-blue-500"
       }`}
     >
-      {/* Header: logo + brand + time + source badge */}
+      {/* Header */}
       <div className="flex items-center gap-3 mb-2">
         <div className="flex-shrink-0 w-10 h-10 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
           {!logoError ? (
@@ -201,7 +327,6 @@ function PromotionCard({
           </span>
         </div>
 
-        {/* Best image — Twitter-style, below text */}
         {promo.best_image_url && !imgError && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -224,40 +349,52 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [activeFilter, setActiveFilter] = useState("all");
 
   const offsetRef = useRef(0);
   const newestIdRef = useRef<string | null>(null);
-  // Refs for loadMore guard — avoids stale closures that cause the
-  // IntersectionObserver to tear down/rebuild and miss scroll triggers
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const activeFilterRef = useRef("all");
 
-  const fetchPromotions = useCallback(async (offset: number, append = false) => {
-    try {
-      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=${offset}`);
-      const data = await res.json();
-      const incoming: Promotion[] = data.promotions ?? [];
+  const fetchPromotions = useCallback(
+    async (offset: number, append = false, filter = activeFilterRef.current) => {
+      try {
+        const params = new URLSearchParams({
+          limit: String(PAGE_SIZE),
+          offset: String(offset),
+        });
+        if (filter !== "all") params.set("source", filter);
 
-      setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
+        const res = await fetch(`/api/promotions?${params}`);
+        const data = await res.json();
+        const incoming: Promotion[] = data.promotions ?? [];
 
-      const more = incoming.length === PAGE_SIZE;
-      setHasMore(more);
-      hasMoreRef.current = more;
+        setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
 
-      offsetRef.current = offset + incoming.length;
-      if (!append && incoming.length > 0) {
-        newestIdRef.current = incoming[0].id;
+        const more = incoming.length === PAGE_SIZE;
+        setHasMore(more);
+        hasMoreRef.current = more;
+
+        offsetRef.current = offset + incoming.length;
+        if (!append && incoming.length > 0) {
+          newestIdRef.current = incoming[0].id;
+        }
+      } catch (err) {
+        console.error("Fetch failed:", err);
       }
-    } catch (err) {
-      console.error("Fetch failed:", err);
-    }
-  }, []);
+    },
+    []
+  );
 
-  // Poll for new items only — prepend without disturbing scroll position
   const pollForNew = useCallback(async () => {
     if (!newestIdRef.current) return;
     try {
-      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=0`);
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: "0" });
+      if (activeFilterRef.current !== "all")
+        params.set("source", activeFilterRef.current);
+
+      const res = await fetch(`/api/promotions?${params}`);
       const data = await res.json();
       const incoming: Promotion[] = data.promotions ?? [];
       const newItems = incoming.filter(
@@ -276,25 +413,19 @@ export default function Home() {
     }
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    setRead(getRead());
-    fetchPromotions(0).finally(() => setLoading(false));
-  }, [fetchPromotions]);
+  const handleFilter = useCallback(
+    (f: string) => {
+      activeFilterRef.current = f;
+      setActiveFilter(f);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      setHasMore(true);
+      setLoading(true);
+      fetchPromotions(0, false, f).finally(() => setLoading(false));
+    },
+    [fetchPromotions]
+  );
 
-  // Polling — only prepends genuinely new items
-  useEffect(() => {
-    const id = setInterval(pollForNew, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [pollForNew]);
-
-  const handleRead = useCallback((id: string) => {
-    markRead(id);
-    setRead((prev) => new Set(prev).add(id));
-  }, []);
-
-  // loadMore uses refs for its guard so its identity stays stable —
-  // only depends on fetchPromotions (which is also stable via useCallback[])
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || !hasMoreRef.current) return;
     loadingMoreRef.current = true;
@@ -304,66 +435,99 @@ export default function Home() {
     setLoadingMore(false);
   }, [fetchPromotions]);
 
-  // Infinite scroll sentinel — stable observer that never rebuilds mid-scroll
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Initial load
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) loadMore();
-      },
-      { rootMargin: "300px", threshold: 0 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loadMore]); // loadMore is now stable — this effect runs once
+    setRead(getRead());
+    fetchPromotions(0).finally(() => setLoading(false));
+  }, [fetchPromotions]);
+
+  // Polling
+  useEffect(() => {
+    const id = setInterval(pollForNew, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [pollForNew]);
+
+  // ── Infinite scroll via window scroll ─────────────────────────────────
+  // window scroll listener is immune to the IntersectionObserver teardown
+  // race that was silently swallowing loadMore calls.
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrolled = window.scrollY + window.innerHeight;
+      const total = document.documentElement.scrollHeight;
+      if (total - scrolled < 400) {
+        loadMore();
+      }
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [loadMore]);
+
+  const handleRead = useCallback((id: string) => {
+    markRead(id);
+    setRead((prev) => new Set(prev).add(id));
+  }, []);
+
+  const unreadCount = promotions.filter((p) => !read.has(p.id)).length;
 
   return (
     <div className="min-h-screen bg-white dark:bg-black">
-      <header className="sticky top-0 z-10 bg-white/80 dark:bg-black/80 backdrop-blur border-b border-zinc-100 dark:border-zinc-800 px-4 py-3">
-        <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
-          PromoFeed
-        </h1>
-      </header>
+      <Sidebar
+        activeFilter={activeFilter}
+        onFilter={handleFilter}
+        unreadCount={unreadCount}
+      />
 
-      <main className="max-w-xl mx-auto">
-        {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
-          </div>
-        ) : promotions.length === 0 ? (
-          <p className="text-center text-zinc-400 py-16 text-sm">
-            No promotions yet.
-          </p>
-        ) : (
-          <>
-            {promotions.map((p) => (
-              <PromotionCard
-                key={p.id}
-                promo={p}
-                isRead={read.has(p.id)}
-                onRead={handleRead}
-              />
-            ))}
+      <div className="sm:ml-56">
+        <header className="sticky top-0 z-10 bg-white/90 dark:bg-black/90 backdrop-blur border-b border-zinc-100 dark:border-zinc-800 px-4 py-3 flex items-center justify-between">
+          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight">
+            {activeFilter === "all"
+              ? "All Promos"
+              : activeFilter === "email"
+              ? "From Email"
+              : "From Web"}
+          </h1>
+          {unreadCount > 0 && (
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">
+              {unreadCount} unread
+            </span>
+          )}
+        </header>
 
-            {/* Sentinel — sits 300px below the last card; fires loadMore early */}
-            <div ref={sentinelRef} className="h-1" />
+        <main className="max-w-xl mx-auto pb-20 sm:pb-8">
+          {loading ? (
+            <div className="flex justify-center py-16">
+              <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
+            </div>
+          ) : promotions.length === 0 ? (
+            <p className="text-center text-zinc-400 py-16 text-sm">
+              No promotions yet.
+            </p>
+          ) : (
+            <>
+              {promotions.map((p) => (
+                <PromotionCard
+                  key={p.id}
+                  promo={p}
+                  isRead={read.has(p.id)}
+                  onRead={handleRead}
+                />
+              ))}
 
-            {loadingMore && (
-              <div className="flex justify-center py-4">
-                <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
-              </div>
-            )}
+              {loadingMore && (
+                <div className="flex justify-center py-4">
+                  <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
+                </div>
+              )}
 
-            {!hasMore && (
-              <p className="text-center text-zinc-400 py-6 text-xs">
-                You&apos;re all caught up
-              </p>
-            )}
-          </>
-        )}
-      </main>
+              {!hasMore && !loadingMore && (
+                <p className="text-center text-zinc-400 py-6 text-xs">
+                  You&apos;re all caught up
+                </p>
+              )}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
