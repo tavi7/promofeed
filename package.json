@@ -9,7 +9,11 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.0",
     "@supabase/supabase-js": "^2.105.3",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "googleapis": "^171.4.0",
     "next": "16.2.1",
     "playwright": "^1.59.1",
     "react": "19.2.4",
