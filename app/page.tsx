@@ -298,7 +298,6 @@ function SideMenu({
   }>({ type: null, message: "" });
   const [checking, setChecking] = useState(false);
 
-  // Close on Escape
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -314,9 +313,7 @@ function SideMenu({
     setChecking(true);
     setBrandStatus({ type: null, message: "" });
     try {
-      const res = await fetch(
-        `/api/brands?name=${encodeURIComponent(name)}`
-      );
+      const res = await fetch(`/api/brands?name=${encodeURIComponent(name)}`);
       const data = await res.json();
       if (data.exists) {
         setBrandStatus({
@@ -324,6 +321,11 @@ function SideMenu({
           message: `${name} is already in PromoFeed!`,
         });
       } else {
+        await fetch("/api/brands", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
         setBrandStatus({
           type: "new",
           message: `We will add ${name} very soon to PromoFeed.`,
@@ -342,21 +344,17 @@ function SideMenu({
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
           open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
         onClick={onClose}
       />
-
-      {/* Drawer */}
       <div
         className={`fixed top-0 right-0 z-40 h-full w-80 max-w-[90vw] bg-zinc-950 border-l border-white/[0.07] flex flex-col transition-transform duration-300 ease-out ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        {/* Drawer header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.07]">
           <span className="font-bold text-white text-base">Manage Feed</span>
           <button
@@ -371,7 +369,7 @@ function SideMenu({
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {/* ── Add a Brand ── */}
+          {/* Add a Brand */}
           <div className="px-5 py-4 border-b border-white/[0.07]">
             <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
               Add a Brand
@@ -411,7 +409,7 @@ function SideMenu({
             )}
           </div>
 
-          {/* ── Brand filter ── */}
+          {/* Brand filter */}
           <div className="px-5 py-4">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
@@ -421,7 +419,6 @@ function SideMenu({
                 {visibleCount}/{brands.length} visible
               </span>
             </div>
-
             {brands.length === 0 ? (
               <p className="text-sm text-zinc-600">No brands yet.</p>
             ) : (
@@ -439,7 +436,6 @@ function SideMenu({
                             : "opacity-40 hover:opacity-60"
                         }`}
                       >
-                        {/* Mini logo */}
                         <div className="w-7 h-7 rounded-full overflow-hidden bg-white/10 flex-shrink-0 flex items-center justify-center">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -454,7 +450,6 @@ function SideMenu({
                         <span className="flex-1 text-left text-sm text-zinc-200 truncate">
                           {b.name}
                         </span>
-                        {/* Toggle indicator */}
                         <div
                           className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
                             isVisible ? "bg-blue-500" : "bg-zinc-700"
@@ -487,6 +482,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const offsetRef = useRef(0);
   const newestIdRef = useRef<string | null>(null);
 
@@ -495,60 +491,55 @@ export default function Home() {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [hiddenBrands, setHiddenBrands] = useState<Set<string>>(new Set());
 
-  // ── Fetch brands for the menu ──────────────────────────────────────────────
-  useEffect(() => {
-    setHiddenBrands(getHiddenBrands());
-    fetch("/api/brands")
-      .then((r) => r.json())
-      .then((d) => setBrands(d.brands ?? []))
-      .catch(() => {});
-  }, []);
+  // Refs to avoid stale closures inside callbacks/observers
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const hiddenBrandsRef = useRef(hiddenBrands);
+  hasMoreRef.current = hasMore;
+  hiddenBrandsRef.current = hiddenBrands;
 
-  // ── Toggle a brand in/out of the hidden set ────────────────────────────────
-  const handleToggleBrand = useCallback((domain: string) => {
-    setHiddenBrands((prev) => {
-      const next = new Set(prev);
-      if (next.has(domain)) {
-        next.delete(domain);
-      } else {
-        next.add(domain);
-      }
-      saveHiddenBrands(next);
-      return next;
-    });
-  }, []);
+  // ── Build the exclude query-param string from current hidden set ──────────
+  const buildExcludeParam = (hidden: Set<string>) =>
+    hidden.size > 0
+      ? `&exclude=${encodeURIComponent([...hidden].join(","))}`
+      : "";
 
-  // ── Feed fetching ─────────────────────────────────────────────────────────
-  const fetchPromotions = useCallback(async (offset: number, append = false) => {
-    try {
-      const res = await fetch(
-        `/api/promotions?limit=${PAGE_SIZE}&offset=${offset}`
-      );
-      const data = await res.json();
-      const incoming: Promotion[] = data.promotions ?? [];
-      setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
-      setHasMore(incoming.length === PAGE_SIZE);
-      offsetRef.current = offset + incoming.length;
-      if (!append && incoming.length > 0) {
-        newestIdRef.current = incoming[0].id;
+  // ── Fetch from /api/promotions with current filter applied ────────────────
+  const fetchPromotions = useCallback(
+    async (offset: number, append: boolean) => {
+      try {
+        const exclude = buildExcludeParam(hiddenBrandsRef.current);
+        const res = await fetch(
+          `/api/promotions?limit=${PAGE_SIZE}&offset=${offset}${exclude}`
+        );
+        const data = await res.json();
+        const incoming: Promotion[] = data.promotions ?? [];
+
+        setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
+        setHasMore(incoming.length === PAGE_SIZE);
+        offsetRef.current = offset + incoming.length;
+        if (!append && incoming.length > 0) {
+          newestIdRef.current = incoming[0].id;
+        }
+      } catch (err) {
+        console.error("Fetch failed:", err);
       }
-    } catch (err) {
-      console.error("Fetch failed:", err);
-    }
-  }, []);
+    },
+    []
+  );
 
   const pollForNew = useCallback(async () => {
     if (!newestIdRef.current) return;
     try {
-      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=0`);
+      const exclude = buildExcludeParam(hiddenBrandsRef.current);
+      const res = await fetch(
+        `/api/promotions?limit=${PAGE_SIZE}&offset=0${exclude}`
+      );
       const data = await res.json();
       const incoming: Promotion[] = data.promotions ?? [];
-      const newItems = incoming.filter(
-        (p) =>
-          p.id !== newestIdRef.current &&
-          incoming.indexOf(p) <
-            incoming.findIndex((x) => x.id === newestIdRef.current)
-      );
+      const newestIdx = incoming.findIndex((x) => x.id === newestIdRef.current);
+      const newItems =
+        newestIdx === -1 ? incoming : incoming.slice(0, newestIdx);
       if (newItems.length > 0) {
         setPromotions((prev) => [...newItems, ...prev]);
         newestIdRef.current = newItems[0].id;
@@ -559,28 +550,20 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => {
-    setRead(getRead());
-    fetchPromotions(0).finally(() => setLoading(false));
-  }, [fetchPromotions]);
-
-  useEffect(() => {
-    const id = setInterval(pollForNew, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [pollForNew]);
-
   const handleRead = useCallback((id: string) => {
     markRead(id);
     setRead((prev) => new Set(prev).add(id));
   }, []);
 
-  // ── Infinite scroll ────────────────────────────────────────────────────────
-  // Keep a stable ref to loadMore so the IntersectionObserver never needs to
-  // be torn down and recreated (which caused it to miss re-triggers when the
-  // sentinel was already in view after a page loaded).
-  const loadingMoreRef = useRef(false);
-  const hasMoreRef = useRef(true);
-  hasMoreRef.current = hasMore;
+  const handleToggleBrand = useCallback((domain: string) => {
+    setHiddenBrands((prev) => {
+      const next = new Set(prev);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      saveHiddenBrands(next);
+      return next;
+    });
+  }, []);
 
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || !hasMoreRef.current) return;
@@ -592,31 +575,58 @@ export default function Home() {
   }, [fetchPromotions]);
 
   const loadMoreRef = useRef(loadMore);
-  useEffect(() => { loadMoreRef.current = loadMore; }, [loadMore]);
+  loadMoreRef.current = loadMore;
 
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  // ── Initial mount: load cookie + brand list, mark initialized ─────────────
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMoreRef.current(); },
-      { threshold: 0 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-    // ← intentionally empty deps: observer is created once, always calls the
-    //   latest loadMore via the ref above
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setRead(getRead());
+    setHiddenBrands(getHiddenBrands());
+    fetch("/api/brands")
+      .then((r) => r.json())
+      .then((d) => setBrands(d.brands ?? []))
+      .catch(() => {});
+    setInitialized(true);
   }, []);
 
-  // ── Filtered feed ─────────────────────────────────────────────────────────
-  const visiblePromotions = promotions.filter(
-    (p) => !hiddenBrands.has(rootDomain(p.brand_domain))
-  );
+  // ── Refetch whenever filter changes (including the initial cookie load) ───
+  useEffect(() => {
+    if (!initialized) return;
+    setLoading(true);
+    offsetRef.current = 0;
+    newestIdRef.current = null;
+    setHasMore(true);
+    fetchPromotions(0, false).finally(() => setLoading(false));
+  }, [hiddenBrands, initialized, fetchPromotions]);
+
+  // ── Polling for new items ─────────────────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(pollForNew, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [pollForNew]);
+
+  // ── Sentinel via CALLBACK REF — fires when the element actually mounts ────
+  // This is the real fix for the load-more bug. A `useEffect(() => {...}, [])`
+  // observer would run before the sentinel is rendered (during the loading
+  // state) and never attach. A callback ref runs at the moment React attaches
+  // the DOM node, regardless of where in the lifecycle that happens.
+  const observerInstanceRef = useRef<IntersectionObserver | null>(null);
+  const sentinelCallback = useCallback((node: HTMLDivElement | null) => {
+    if (observerInstanceRef.current) {
+      observerInstanceRef.current.disconnect();
+      observerInstanceRef.current = null;
+    }
+    if (!node) return;
+    observerInstanceRef.current = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) loadMoreRef.current();
+      },
+      { threshold: 0, rootMargin: "300px" } // pre-load before the user hits the end
+    );
+    observerInstanceRef.current.observe(node);
+  }, []);
 
   return (
     <div className="min-h-screen bg-zinc-950">
-      {/* Header */}
       <header className="sticky top-0 z-20 bg-zinc-950/85 backdrop-blur-md border-b border-white/[0.06] px-4 py-3 flex items-center justify-between">
         <h1 className="text-lg font-bold text-white tracking-tight">PromoFeed</h1>
         <button
@@ -624,7 +634,6 @@ export default function Home() {
           className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
           aria-label="Open menu"
         >
-          {/* Burger icon */}
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
@@ -636,15 +645,15 @@ export default function Home() {
           <div className="flex justify-center py-16">
             <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-300 rounded-full animate-spin" />
           </div>
-        ) : visiblePromotions.length === 0 ? (
+        ) : promotions.length === 0 ? (
           <p className="text-center text-zinc-600 py-16 text-sm">
-            {promotions.length === 0
-              ? "No promotions yet."
-              : "All brands are hidden — turn some back on in the menu."}
+            {hiddenBrands.size > 0
+              ? "All brands are hidden — turn some back on in the menu."
+              : "No promotions yet."}
           </p>
         ) : (
           <>
-            {visiblePromotions.map((p) => (
+            {promotions.map((p) => (
               <PromotionCard
                 key={p.id}
                 promo={p}
@@ -653,8 +662,8 @@ export default function Home() {
               />
             ))}
 
-            {/* Sentinel — always rendered so the observer can fire */}
-            <div ref={sentinelRef} className="h-8" />
+            {/* Sentinel — callback ref attaches the observer the moment this mounts */}
+            <div ref={sentinelCallback} className="h-8" />
 
             {loadingMore && (
               <div className="flex justify-center py-4">
