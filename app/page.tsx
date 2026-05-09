@@ -5,6 +5,11 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface PromotionImage {
+  url: string;
+  role: string;
+}
+
 interface Promotion {
   id: string;
   brand_name: string;
@@ -17,7 +22,7 @@ interface Promotion {
   expiry_date: string | null;
   relevance_score: number;
   created_at: string;
-  best_image_url: string | null;
+  images: PromotionImage[];
   source: "email" | "web";
   click_url: string | null;
 }
@@ -33,6 +38,24 @@ const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 60_000;
 const READ_STORAGE_KEY = "promofeed_read";
 const HIDDEN_BRANDS_COOKIE = "promofeed_hidden_brands";
+
+// ─── Debug logger ─────────────────────────────────────────────────────────────
+
+declare global {
+  interface Window { __pf_logs?: string[]; }
+}
+
+function pflog(...args: unknown[]) {
+  const msg = args
+    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+    .join(" ");
+  // eslint-disable-next-line no-console
+  console.log("[PF]", ...args);
+  if (typeof window !== "undefined") {
+    window.__pf_logs ??= [];
+    window.__pf_logs.push(`${new Date().toISOString()} ${msg}`);
+  }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,14 +83,12 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-// ─── Read state (localStorage) ────────────────────────────────────────────────
+// ─── Read state ───────────────────────────────────────────────────────────────
 
 function getRead(): Set<string> {
   try {
     return new Set(JSON.parse(localStorage.getItem(READ_STORAGE_KEY) ?? "[]"));
-  } catch {
-    return new Set();
-  }
+  } catch { return new Set(); }
 }
 
 function markRead(id: string) {
@@ -78,7 +99,7 @@ function markRead(id: string) {
   } catch {}
 }
 
-// ─── Brand-filter persistence (cookie, 1-year expiry) ─────────────────────────
+// ─── Brand-filter persistence ─────────────────────────────────────────────────
 
 function getHiddenBrands(): Set<string> {
   try {
@@ -87,9 +108,7 @@ function getHiddenBrands(): Set<string> {
     );
     if (!match) return new Set();
     return new Set(JSON.parse(decodeURIComponent(match[1])));
-  } catch {
-    return new Set();
-  }
+  } catch { return new Set(); }
 }
 
 function saveHiddenBrands(hidden: Set<string>) {
@@ -112,9 +131,18 @@ function PromotionCard({
   onRead: (id: string) => void;
 }) {
   const ref = useRef<HTMLAnchorElement>(null);
+  const carouselRef = useRef<HTMLDivElement>(null);
   const [logoError, setLogoError] = useState(false);
-  const [imgError, setImgError] = useState(false);
+  // Track which images have failed to load — broken ones get filtered out
+  const [brokenImages, setBrokenImages] = useState<Set<number>>(new Set());
+  const [activeIndex, setActiveIndex] = useState(0);
 
+  // Filter out broken images from the visible list
+  const visibleImages = promo.images.filter((_, i) => !brokenImages.has(i));
+  const hasImage = visibleImages.length > 0;
+  const hasCarousel = visibleImages.length > 1;
+
+  // ── Read tracking — observe the card itself ──────────────────────────────
   useEffect(() => {
     if (isRead) return;
     const el = ref.current;
@@ -131,13 +159,16 @@ function PromotionCard({
       { threshold: 0.8 }
     );
     observer.observe(el);
-    return () => {
-      observer.disconnect();
-      clearTimeout(timer);
-    };
+    return () => { observer.disconnect(); clearTimeout(timer); };
   }, [isRead, promo.id, onRead]);
 
-  const hasImage = !!(promo.best_image_url && !imgError);
+  // ── Carousel scroll → update active dot ──────────────────────────────────
+  const handleCarouselScroll = useCallback(() => {
+    const el = carouselRef.current;
+    if (!el) return;
+    const idx = Math.round(el.scrollLeft / el.clientWidth);
+    setActiveIndex((prev) => (prev !== idx ? idx : prev));
+  }, []);
 
   function CardHeader({ overlay }: { overlay: boolean }) {
     return (
@@ -158,16 +189,10 @@ function PromotionCard({
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <span
-            className={`font-semibold text-sm ${
-              overlay ? "text-white drop-shadow" : "text-zinc-100"
-            }`}
-          >
+          <span className={`font-semibold text-sm ${overlay ? "text-white drop-shadow" : "text-zinc-100"}`}>
             {promo.brand_name}
           </span>
-          <span
-            className={`text-xs ml-2 ${overlay ? "text-white/55" : "text-zinc-500"}`}
-          >
+          <span className={`text-xs ml-2 ${overlay ? "text-white/55" : "text-zinc-500"}`}>
             {timeAgo(promo.created_at)}
           </span>
         </div>
@@ -203,27 +228,15 @@ function PromotionCard({
             </span>
           )}
         </div>
-        <p
-          className={`font-bold text-[17px] leading-snug mb-1 ${
-            overlay ? "text-white drop-shadow" : "text-zinc-100"
-          }`}
-        >
+        <p className={`font-bold text-[17px] leading-snug mb-1 ${overlay ? "text-white drop-shadow" : "text-zinc-100"}`}>
           {promo.title}
         </p>
         {promo.description && (
-          <p
-            className={`text-sm leading-relaxed line-clamp-2 ${
-              overlay ? "text-white/65" : "text-zinc-400"
-            }`}
-          >
+          <p className={`text-sm leading-relaxed line-clamp-2 ${overlay ? "text-white/65" : "text-zinc-400"}`}>
             {promo.description}
           </p>
         )}
-        <span
-          className={`inline-block mt-2 text-[11px] uppercase tracking-wider ${
-            overlay ? "text-white/35" : "text-zinc-600"
-          }`}
-        >
+        <span className={`inline-block mt-2 text-[11px] uppercase tracking-wider ${overlay ? "text-white/35" : "text-zinc-600"}`}>
           {promo.category}
         </span>
       </>
@@ -240,15 +253,36 @@ function PromotionCard({
     >
       {hasImage ? (
         <div className="relative" style={{ aspectRatio: "4/5" }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={promo.best_image_url!}
-            alt={promo.title}
-            className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.025]"
-            onError={() => setImgError(true)}
-          />
+          {/* Carousel — horizontal scroll-snap. Single image still renders here,
+              just without dots and without effective swiping. */}
           <div
-            className="absolute inset-x-0 top-0 z-10 px-4 pt-4 pb-12"
+            ref={carouselRef}
+            onScroll={handleCarouselScroll}
+            className="absolute inset-0 flex overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: "none" }}
+          >
+            {promo.images.map((img, i) => {
+              if (brokenImages.has(i)) return null;
+              return (
+                <div key={i} className="flex-none w-full h-full snap-start">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img.url}
+                    alt={`${promo.title} — ${i + 1}`}
+                    className="w-full h-full object-cover"
+                    draggable={false}
+                    onError={() =>
+                      setBrokenImages((prev) => new Set(prev).add(i))
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Top gradient + header */}
+          <div
+            className="absolute inset-x-0 top-0 z-10 px-4 pt-4 pb-12 pointer-events-none"
             style={{
               background:
                 "linear-gradient(to bottom, rgba(0,0,0,0.70) 0%, transparent 100%)",
@@ -256,8 +290,27 @@ function PromotionCard({
           >
             <CardHeader overlay />
           </div>
+
+          {/* Pagination dots — only for >1 image */}
+          {hasCarousel && (
+            <div className="absolute z-10 left-1/2 -translate-x-1/2 flex gap-1.5 pointer-events-none"
+                 style={{ bottom: "42%" }}>
+              {visibleImages.map((_, i) => (
+                <div
+                  key={i}
+                  className={`rounded-full transition-all duration-200 ${
+                    i === activeIndex
+                      ? "w-2 h-2 bg-white shadow-[0_0_4px_rgba(0,0,0,0.6)]"
+                      : "w-1.5 h-1.5 bg-white/55 mt-[1px]"
+                  }`}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Bottom gradient + body */}
           <div
-            className="absolute inset-x-0 bottom-0 z-10 px-4 pb-5 pt-20"
+            className="absolute inset-x-0 bottom-0 z-10 px-4 pb-5 pt-20 pointer-events-none"
             style={{
               background:
                 "linear-gradient(to top, rgba(0,0,0,0.90) 0%, rgba(0,0,0,0.55) 55%, transparent 100%)",
@@ -300,9 +353,7 @@ function SideMenu({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
@@ -316,20 +367,14 @@ function SideMenu({
       const res = await fetch(`/api/brands?name=${encodeURIComponent(name)}`);
       const data = await res.json();
       if (data.exists) {
-        setBrandStatus({
-          type: "exists",
-          message: `${name} is already in PromoFeed!`,
-        });
+        setBrandStatus({ type: "exists", message: `${name} is already in PromoFeed!` });
       } else {
         await fetch("/api/brands", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),
         });
-        setBrandStatus({
-          type: "new",
-          message: `We will add ${name} very soon to PromoFeed.`,
-        });
+        setBrandStatus({ type: "new", message: `We will add ${name} very soon to PromoFeed.` });
       }
     } catch {
       setBrandStatus({ type: "error", message: "Something went wrong. Try again." });
@@ -338,50 +383,31 @@ function SideMenu({
     }
   }
 
-  const visibleCount = brands.filter(
-    (b) => !hiddenBrands.has(rootDomain(b.domain))
-  ).length;
+  const visibleCount = brands.filter((b) => !hiddenBrands.has(rootDomain(b.domain))).length;
 
   return (
     <>
       <div
-        className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
-          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-        }`}
+        className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
         onClick={onClose}
       />
-      <div
-        className={`fixed top-0 right-0 z-40 h-full w-80 max-w-[90vw] bg-zinc-950 border-l border-white/[0.07] flex flex-col transition-transform duration-300 ease-out ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
+      <div className={`fixed top-0 right-0 z-40 h-full w-80 max-w-[90vw] bg-zinc-950 border-l border-white/[0.07] flex flex-col transition-transform duration-300 ease-out ${open ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.07]">
           <span className="font-bold text-white text-base">Manage Feed</span>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-white transition-colors p-1"
-            aria-label="Close menu"
-          >
+          <button onClick={onClose} className="text-zinc-400 hover:text-white transition-colors p-1" aria-label="Close menu">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
-
         <div className="flex-1 overflow-y-auto">
-          {/* Add a Brand */}
           <div className="px-5 py-4 border-b border-white/[0.07]">
-            <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
-              Add a Brand
-            </p>
+            <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Add a Brand</p>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={brandInput}
-                onChange={(e) => {
-                  setBrandInput(e.target.value);
-                  setBrandStatus({ type: null, message: "" });
-                }}
+                onChange={(e) => { setBrandInput(e.target.value); setBrandStatus({ type: null, message: "" }); }}
                 onKeyDown={(e) => { if (e.key === "Enter") handleAddBrand(); }}
                 placeholder="e.g. Zara, ASOS…"
                 className="flex-1 bg-zinc-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-white/30 transition-colors"
@@ -395,29 +421,15 @@ function SideMenu({
               </button>
             </div>
             {brandStatus.type && (
-              <p
-                className={`mt-2 text-xs leading-snug ${
-                  brandStatus.type === "exists"
-                    ? "text-emerald-400"
-                    : brandStatus.type === "new"
-                    ? "text-blue-400"
-                    : "text-red-400"
-                }`}
-              >
+              <p className={`mt-2 text-xs leading-snug ${brandStatus.type === "exists" ? "text-emerald-400" : brandStatus.type === "new" ? "text-blue-400" : "text-red-400"}`}>
                 {brandStatus.message}
               </p>
             )}
           </div>
-
-          {/* Brand filter */}
           <div className="px-5 py-4">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-                My Brands
-              </p>
-              <span className="text-xs text-zinc-600">
-                {visibleCount}/{brands.length} visible
-              </span>
+              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">My Brands</p>
+              <span className="text-xs text-zinc-600">{visibleCount}/{brands.length} visible</span>
             </div>
             {brands.length === 0 ? (
               <p className="text-sm text-zinc-600">No brands yet.</p>
@@ -430,11 +442,7 @@ function SideMenu({
                     <li key={b.domain}>
                       <button
                         onClick={() => onToggleBrand(key)}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
-                          isVisible
-                            ? "bg-zinc-900 hover:bg-zinc-800"
-                            : "opacity-40 hover:opacity-60"
-                        }`}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${isVisible ? "bg-zinc-900 hover:bg-zinc-800" : "opacity-40 hover:opacity-60"}`}
                       >
                         <div className="w-7 h-7 rounded-full overflow-hidden bg-white/10 flex-shrink-0 flex items-center justify-center">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -442,24 +450,12 @@ function SideMenu({
                             src={logoUrl(b.domain)}
                             alt={b.name}
                             className="w-7 h-7 object-contain"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = "none";
-                            }}
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                           />
                         </div>
-                        <span className="flex-1 text-left text-sm text-zinc-200 truncate">
-                          {b.name}
-                        </span>
-                        <div
-                          className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
-                            isVisible ? "bg-blue-500" : "bg-zinc-700"
-                          }`}
-                        >
-                          <div
-                            className={`w-3 h-3 rounded-full bg-white mt-0.5 transition-transform ${
-                              isVisible ? "translate-x-4" : "translate-x-0.5"
-                            }`}
-                          />
+                        <span className="flex-1 text-left text-sm text-zinc-200 truncate">{b.name}</span>
+                        <div className={`w-8 h-4 rounded-full transition-colors flex-shrink-0 ${isVisible ? "bg-blue-500" : "bg-zinc-700"}`}>
+                          <div className={`w-3 h-3 rounded-full bg-white mt-0.5 transition-transform ${isVisible ? "translate-x-4" : "translate-x-0.5"}`} />
                         </div>
                       </button>
                     </li>
@@ -486,67 +482,60 @@ export default function Home() {
   const offsetRef = useRef(0);
   const newestIdRef = useRef<string | null>(null);
 
-  // Burger menu
   const [menuOpen, setMenuOpen] = useState(false);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [hiddenBrands, setHiddenBrands] = useState<Set<string>>(new Set());
 
-  // Refs to avoid stale closures inside callbacks/observers
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
   const hiddenBrandsRef = useRef(hiddenBrands);
   hasMoreRef.current = hasMore;
   hiddenBrandsRef.current = hiddenBrands;
 
-  // ── Build the exclude query-param string from current hidden set ──────────
   const buildExcludeParam = (hidden: Set<string>) =>
-    hidden.size > 0
-      ? `&exclude=${encodeURIComponent([...hidden].join(","))}`
-      : "";
+    hidden.size > 0 ? `&exclude=${encodeURIComponent([...hidden].join(","))}` : "";
 
-  // ── Fetch from /api/promotions with current filter applied ────────────────
-  const fetchPromotions = useCallback(
-    async (offset: number, append: boolean) => {
-      try {
-        const exclude = buildExcludeParam(hiddenBrandsRef.current);
-        const res = await fetch(
-          `/api/promotions?limit=${PAGE_SIZE}&offset=${offset}${exclude}`
-        );
-        const data = await res.json();
-        const incoming: Promotion[] = data.promotions ?? [];
-
-        setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
-        setHasMore(incoming.length === PAGE_SIZE);
-        offsetRef.current = offset + incoming.length;
-        if (!append && incoming.length > 0) {
-          newestIdRef.current = incoming[0].id;
-        }
-      } catch (err) {
-        console.error("Fetch failed:", err);
-      }
-    },
-    []
-  );
+  const fetchPromotions = useCallback(async (offset: number, append: boolean) => {
+    const exclude = buildExcludeParam(hiddenBrandsRef.current);
+    const url = `/api/promotions?limit=${PAGE_SIZE}&offset=${offset}${exclude}`;
+    pflog("fetch.start", { offset, append, exclude: [...hiddenBrandsRef.current] });
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      const incoming: Promotion[] = data.promotions ?? [];
+      pflog("fetch.done", {
+        offset, append,
+        received: incoming.length,
+        firstId: incoming[0]?.id ?? null,
+        brands: [...new Set(incoming.map((p) => p.brand_name))],
+      });
+      setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
+      setHasMore(incoming.length === PAGE_SIZE);
+      offsetRef.current = offset + incoming.length;
+      if (!append && incoming.length > 0) newestIdRef.current = incoming[0].id;
+    } catch (err) {
+      pflog("fetch.error", String(err));
+    }
+  }, []);
 
   const pollForNew = useCallback(async () => {
     if (!newestIdRef.current) return;
+    pflog("poll.start", { newestId: newestIdRef.current });
     try {
       const exclude = buildExcludeParam(hiddenBrandsRef.current);
-      const res = await fetch(
-        `/api/promotions?limit=${PAGE_SIZE}&offset=0${exclude}`
-      );
+      const res = await fetch(`/api/promotions?limit=${PAGE_SIZE}&offset=0${exclude}`);
       const data = await res.json();
       const incoming: Promotion[] = data.promotions ?? [];
       const newestIdx = incoming.findIndex((x) => x.id === newestIdRef.current);
-      const newItems =
-        newestIdx === -1 ? incoming : incoming.slice(0, newestIdx);
+      const newItems = newestIdx === -1 ? incoming : incoming.slice(0, newestIdx);
+      pflog("poll.done", { newCount: newItems.length });
       if (newItems.length > 0) {
         setPromotions((prev) => [...newItems, ...prev]);
         newestIdRef.current = newItems[0].id;
         offsetRef.current += newItems.length;
       }
     } catch (err) {
-      console.error("Poll failed:", err);
+      pflog("poll.error", String(err));
     }
   }, []);
 
@@ -556,6 +545,7 @@ export default function Home() {
   }, []);
 
   const handleToggleBrand = useCallback((domain: string) => {
+    pflog("filter.toggle", { domain });
     setHiddenBrands((prev) => {
       const next = new Set(prev);
       if (next.has(domain)) next.delete(domain);
@@ -566,7 +556,11 @@ export default function Home() {
   }, []);
 
   const loadMore = useCallback(async () => {
-    if (loadingMoreRef.current || !hasMoreRef.current) return;
+    if (loadingMoreRef.current || !hasMoreRef.current) {
+      pflog("loadMore.skip", { loadingMore: loadingMoreRef.current, hasMore: hasMoreRef.current });
+      return;
+    }
+    pflog("loadMore.run", { offset: offsetRef.current });
     loadingMoreRef.current = true;
     setLoadingMore(true);
     await fetchPromotions(offsetRef.current, true);
@@ -577,20 +571,22 @@ export default function Home() {
   const loadMoreRef = useRef(loadMore);
   loadMoreRef.current = loadMore;
 
-  // ── Initial mount: load cookie + brand list, mark initialized ─────────────
   useEffect(() => {
+    pflog("mount");
     setRead(getRead());
-    setHiddenBrands(getHiddenBrands());
+    const hidden = getHiddenBrands();
+    pflog("mount.cookie", { hidden: [...hidden] });
+    setHiddenBrands(hidden);
     fetch("/api/brands")
       .then((r) => r.json())
-      .then((d) => setBrands(d.brands ?? []))
-      .catch(() => {});
+      .then((d) => { pflog("mount.brands", { count: (d.brands ?? []).length }); setBrands(d.brands ?? []); })
+      .catch((err) => pflog("mount.brands.error", String(err)));
     setInitialized(true);
   }, []);
 
-  // ── Refetch whenever filter changes (including the initial cookie load) ───
   useEffect(() => {
     if (!initialized) return;
+    pflog("filter.refetch", { hidden: [...hiddenBrands] });
     setLoading(true);
     offsetRef.current = 0;
     newestIdRef.current = null;
@@ -598,29 +594,29 @@ export default function Home() {
     fetchPromotions(0, false).finally(() => setLoading(false));
   }, [hiddenBrands, initialized, fetchPromotions]);
 
-  // ── Polling for new items ─────────────────────────────────────────────────
   useEffect(() => {
     const id = setInterval(pollForNew, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [pollForNew]);
 
-  // ── Sentinel via CALLBACK REF — fires when the element actually mounts ────
-  // This is the real fix for the load-more bug. A `useEffect(() => {...}, [])`
-  // observer would run before the sentinel is rendered (during the loading
-  // state) and never attach. A callback ref runs at the moment React attaches
-  // the DOM node, regardless of where in the lifecycle that happens.
   const observerInstanceRef = useRef<IntersectionObserver | null>(null);
   const sentinelCallback = useCallback((node: HTMLDivElement | null) => {
     if (observerInstanceRef.current) {
+      pflog("observer.disconnect");
       observerInstanceRef.current.disconnect();
       observerInstanceRef.current = null;
     }
-    if (!node) return;
+    if (!node) { pflog("observer.detach (node=null)"); return; }
+    pflog("observer.attach");
     observerInstanceRef.current = new IntersectionObserver(
       ([entry]) => {
+        pflog("observer.fire", {
+          isIntersecting: entry.isIntersecting,
+          ratio: entry.intersectionRatio,
+        });
         if (entry.isIntersecting) loadMoreRef.current();
       },
-      { threshold: 0, rootMargin: "300px" } // pre-load before the user hits the end
+      { threshold: 0, rootMargin: "300px" }
     );
     observerInstanceRef.current.observe(node);
   }, []);
@@ -654,16 +650,10 @@ export default function Home() {
         ) : (
           <>
             {promotions.map((p) => (
-              <PromotionCard
-                key={p.id}
-                promo={p}
-                isRead={read.has(p.id)}
-                onRead={handleRead}
-              />
+              <PromotionCard key={p.id} promo={p} isRead={read.has(p.id)} onRead={handleRead} />
             ))}
 
-            {/* Sentinel — callback ref attaches the observer the moment this mounts */}
-            <div ref={sentinelCallback} className="h-8" />
+            <div ref={sentinelCallback} className="h-8" data-pf-sentinel />
 
             {loadingMore && (
               <div className="flex justify-center py-4">
