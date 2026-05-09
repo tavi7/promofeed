@@ -133,16 +133,13 @@ function PromotionCard({
   const ref = useRef<HTMLAnchorElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   const [logoError, setLogoError] = useState(false);
-  // Track which images have failed to load — broken ones get filtered out
   const [brokenImages, setBrokenImages] = useState<Set<number>>(new Set());
   const [activeIndex, setActiveIndex] = useState(0);
 
-  // Filter out broken images from the visible list
   const visibleImages = promo.images.filter((_, i) => !brokenImages.has(i));
   const hasImage = visibleImages.length > 0;
   const hasCarousel = visibleImages.length > 1;
 
-  // ── Read tracking — observe the card itself ──────────────────────────────
   useEffect(() => {
     if (isRead) return;
     const el = ref.current;
@@ -162,7 +159,6 @@ function PromotionCard({
     return () => { observer.disconnect(); clearTimeout(timer); };
   }, [isRead, promo.id, onRead]);
 
-  // ── Carousel scroll → update active dot ──────────────────────────────────
   const handleCarouselScroll = useCallback(() => {
     const el = carouselRef.current;
     if (!el) return;
@@ -253,18 +249,21 @@ function PromotionCard({
     >
       {hasImage ? (
         <div className="relative" style={{ aspectRatio: "4/5" }}>
-          {/* Carousel — horizontal scroll-snap. Single image still renders here,
-              just without dots and without effective swiping. */}
+          {/* iOS Safari fix: touchAction + WebkitOverflowScrolling + min-w-full */}
           <div
             ref={carouselRef}
             onScroll={handleCarouselScroll}
             className="absolute inset-0 flex overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden"
-            style={{ scrollbarWidth: "none" }}
+            style={{
+              scrollbarWidth: "none",
+              WebkitOverflowScrolling: "touch",
+              touchAction: "pan-x",
+            }}
           >
             {promo.images.map((img, i) => {
               if (brokenImages.has(i)) return null;
               return (
-                <div key={i} className="flex-none w-full h-full snap-start">
+                <div key={i} className="flex-none min-w-full h-full snap-start">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={img.url}
@@ -280,7 +279,6 @@ function PromotionCard({
             })}
           </div>
 
-          {/* Top gradient + header */}
           <div
             className="absolute inset-x-0 top-0 z-10 px-4 pt-4 pb-12 pointer-events-none"
             style={{
@@ -291,7 +289,6 @@ function PromotionCard({
             <CardHeader overlay />
           </div>
 
-          {/* Pagination dots — only for >1 image */}
           {hasCarousel && (
             <div className="absolute z-10 left-1/2 -translate-x-1/2 flex gap-1.5 pointer-events-none"
                  style={{ bottom: "42%" }}>
@@ -308,7 +305,6 @@ function PromotionCard({
             </div>
           )}
 
-          {/* Bottom gradient + body */}
           <div
             className="absolute inset-x-0 bottom-0 z-10 px-4 pb-5 pt-20 pointer-events-none"
             style={{
