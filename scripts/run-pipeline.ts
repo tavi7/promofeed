@@ -8,11 +8,12 @@ import { insertPromotion, insertPromotionImages } from "../lib/supabase/insert";
 import { uploadImages } from "../lib/supabase/uploadImages";
 import type { RawImage } from "../lib/types";
 
-// Only upload the best N images per email — avoids wasting time on icons,
-// spacers, and decorative elements that bulk emails contain by the dozen.
-const MAX_IMAGES_PER_EMAIL = 3;
+// Upload up to 5 images per email — product images are prioritised first,
+// which means even if an email has 20 images we keep the 5 best ones by role.
+const MAX_IMAGES_PER_EMAIL = 5;
 
-// Role priority for picking which images to keep — mirrors the API route logic
+// Role priority for picking which images to keep — mirrors the API route logic.
+// Products come first so the card shows actual merchandise, not generic banners.
 const ROLE_PRIORITY: Record<RawImage["role"], number> = {
   product: 0,
   hero:    1,
@@ -53,7 +54,7 @@ async function main() {
     console.log(`  ✓ Inserted: ${enriched.title} (score: ${enriched.relevance_score})`);
     inserted++;
 
-    // Cap images before uploading — take top 3 by role priority
+    // Cap images before uploading — take top MAX by role priority (product first)
     const candidateImages = topImages(extracted.rawImages, MAX_IMAGES_PER_EMAIL);
 
     if (candidateImages.length > 0) {
