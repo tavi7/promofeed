@@ -28,10 +28,12 @@ export interface ParsedPromotion {
   click_url: string | null;
 }
 
-// Raw image extracted from email HTML before any processing
+// Raw image extracted from email HTML before any processing.
+// "cta" = call-to-action button rendered as an image (e.g. "SHOP MEN", "BUY NOW").
+// These are filtered out before upload and never shown as card images.
 export interface RawImage {
   originalUrl: string;
-  role: "hero" | "logo" | "banner" | "product" | "other";
+  role: "hero" | "logo" | "banner" | "product" | "cta" | "other";
   width?: number;
   height?: number;
   altText?: string;

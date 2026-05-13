@@ -8,8 +8,7 @@ const client = new Anthropic();
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 // Extract the first complete JSON object from Claude's response.
-// Handles fences, preamble text, and trailing commentary — much more robust
-// than stripping fences, and survives partial truncation at the end.
+// Handles fences, preamble text, and trailing commentary.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseJSON(raw: string): any {
   const start = raw.indexOf("{");
@@ -38,7 +37,7 @@ const JSON_SHAPE = `{
 
 async function callClaude(userPrompt: string): Promise<Record<string, unknown> | null> {
   const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     max_tokens: 500,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userPrompt }],
@@ -101,8 +100,8 @@ ${JSON_SHAPE}`;
 export interface ScrapedItem {
   brandName: string;
   brandDomain: string;
-  rawText: string; // scraped text of the sale item
-  clickUrl: string; // the page URL this item was scraped from
+  rawText: string;
+  clickUrl: string;
 }
 
 export async function enrichScrapedItem(
@@ -124,13 +123,9 @@ ${JSON_SHAPE}`;
     const parsed = await callClaude(prompt);
     if (!parsed) return null;
 
-    const title =
-      (parsed.title as string | null) ||
-      item.brandName;
+    const title = (parsed.title as string | null) || item.brandName;
 
     return {
-      // Hash the raw text to get a stable, unique ID per item — avoids
-      // duplicate key violations when multiple items are processed in the same ms
       source_email_id: `web_${item.brandDomain}_${Buffer.from(item.rawText.slice(0, 200)).toString("base64").slice(0, 32)}`,
       brand_name: item.brandName,
       brand_domain: item.brandDomain,
@@ -161,30 +156,31 @@ const IMAGE_PROMPT = `Analyze this promotional email image.
 
 Return a JSON object with exactly these fields:
 {
+  "role": "the single best role for this image — choose ONE from: product, hero, banner, cta, logo, other",
   "description": "one sentence describing what's in the image (max 20 words)",
   "tags": ["tag1", "tag2"],
   "has_text": true or false,
-  "extracted_text": "any promo codes, prices, discount percentages, or headlines visible in the image, or null",
-  "show_in_feed": true or false
+  "extracted_text": "any promo codes, prices, discount percentages, or headlines visible in the image, or null"
 }
+
+Role definitions:
+- "product": a product item shot (clothing, shoes, electronics, food item, etc.)
+- "hero": a lifestyle or editorial photo showing the brand aesthetic — model in a scene, campaign imagery
+- "banner": a promotional graphic with seasonal or sale messaging — not a button
+- "cta": a CALL-TO-ACTION BUTTON rendered as an image — text like "SHOP MEN'S", "SHOP WOMEN'S",
+          "BUY NOW", "GET THE DEAL", "SHOP SALE", "EXPLORE NOW". These are navigation buttons,
+          NOT product images. If the image is primarily large bold text on a solid/dark background
+          with a shopping verb, classify it as "cta".
+- "logo": brand logo or wordmark
+- "other": anything else
 
 For "tags", choose any that apply (use exact strings):
 hero_banner, product_shot, lifestyle_photo, logo, discount_text, promo_code,
 seasonal, sale, new_arrival, apparel, electronics, food, beauty, home, travel,
-model_wearing, flat_lay, infographic
+model_wearing, flat_lay, infographic`;
 
-For "show_in_feed": set to TRUE only if the image clearly shows one or more of:
-- Clothing, apparel, or fashion items (worn by a model or as a flat lay)
-- A specific product (electronics, beauty item, shoes, bag, etc.)
-- A lifestyle photo featuring a product in use
-
-Set "show_in_feed" to FALSE if the image is:
-- A logo, wordmark, or brand icon
-- A generic banner with only text or decorative elements
-- A discount announcement graphic (e.g. "50% OFF" on a colored background)
-- A shipping/delivery notice
-- A decorative divider, spacer, or background element
-- Unclear or low quality`;
+// Valid roles as returned by Claude — guards against hallucinated values
+const VALID_ROLES = new Set<RawImage["role"]>(["product", "hero", "banner", "cta", "logo", "other"]);
 
 export async function enrichImagesWithClaude(
   promotionId: string,
@@ -204,7 +200,7 @@ export async function enrichImagesWithClaude(
 
     try {
       const response = await client.messages.create({
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
         max_tokens: 500,
         system: IMAGE_SYSTEM_PROMPT,
         messages: [
@@ -221,29 +217,28 @@ export async function enrichImagesWithClaude(
       const raw = response.content[0];
       const parsed = raw.type === "text" ? parseJSON(raw.text) : {};
 
-      // Encode show_in_feed as a tag so it's queryable without a schema change
-      const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags : [];
-      if (parsed.show_in_feed === true) {
-        tags.push("show_in_feed");
-      }
-
-      console.log(
-        `    ${parsed.show_in_feed ? "✓" : "✗"} ${img.role} image — ${parsed.description ?? "no description"}`
-      );
+      // Use Claude's visual role classification if valid; fall back to HTML-extracted role.
+      // This is the second line of defence — Claude can visually identify CTA buttons
+      // that the HTML parser missed (e.g. when alt text was ambiguous).
+      const aiRole = parsed.role as string | undefined;
+      const resolvedRole: RawImage["role"] =
+        aiRole && VALID_ROLES.has(aiRole as RawImage["role"])
+          ? (aiRole as RawImage["role"])
+          : img.role;
 
       results.push({
         promotion_id: promotionId,
         original_url: img.originalUrl,
         storage_path: img.storage_path,
         public_url: img.public_url,
-        role: img.role,
+        role: resolvedRole,
         width: img.width,
         height: img.height,
         mime_type: img.mime_type,
         file_size_bytes: img.file_size_bytes,
         sort_order: i,
         ai_description: parsed.description ?? "",
-        ai_tags: tags,
+        ai_tags: Array.isArray(parsed.tags) ? parsed.tags : [],
         has_text: Boolean(parsed.has_text),
         extracted_text: parsed.extracted_text ?? null,
       });

@@ -5,10 +5,25 @@ import type { RawEmail, RawImage } from "../types";
 
 // ─── Brand helpers ─────────────────────────────────────────────────────────
 
+// Known ccTLD second-level domains (e.g. .co.il, .co.uk) — don't strip the
+// left part of these or we lose the brand domain.
+const CC_TLDS = new Set(["co.il", "co.uk", "co.jp", "co.nz", "co.za", "com.au", "com.br"]);
+
 function extractBrandDomain(from: string): string {
   const match = from.match(/@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
   if (!match) return "";
-  return match[1].replace(/^(mail|email|news|info|offers|promo)\./i, "");
+  let domain = match[1].replace(/^(mail|email|news|info|offers|promo|send|e\.)\./i, "");
+
+  // Preserve ccTLD compound endings
+  const parts = domain.split(".");
+  if (parts.length >= 3) {
+    const tail = parts.slice(-2).join(".");
+    if (!CC_TLDS.has(tail)) {
+      // Strip one more subdomain level if present
+      domain = parts.slice(-2).join(".");
+    }
+  }
+  return domain;
 }
 
 function extractBrandName(from: string, domain: string): string {
@@ -96,9 +111,7 @@ function scoreAnchor($el: cheerio.Cheerio<AnyNode>, $: cheerio.CheerioAPI): numb
   }
 
   if ($el.find("img").length > 0) score += 2;
-
   if (text.length < 3 || text.length > 80) score -= 3;
-
   if (href.length > 0) score += 1;
 
   return score;
@@ -152,6 +165,10 @@ function isTrackingPixel(src: string, width?: number, height?: number): boolean 
   return false;
 }
 
+// Alt text prefixes that indicate a CTA button image, not a product image.
+// These patterns match "SHOP MEN", "SHOP WOMEN'S", "BUY NOW", "GET THE DEAL" etc.
+const CTA_ALT_PREFIXES = /^(shop|buy|get|order|view|explore|discover|find|see|grab)\s/i;
+
 function classifyImage(
   index: number,
   src: string,
@@ -162,6 +179,7 @@ function classifyImage(
   const alt = altText.toLowerCase();
   const srcLower = src.toLowerCase();
 
+  // ── Logo ──────────────────────────────────────────────────────────────────
   if (
     alt.includes("logo") ||
     srcLower.includes("logo") ||
@@ -171,12 +189,24 @@ function classifyImage(
     return "logo";
   }
 
+  // ── CTA button (must come BEFORE product check) ───────────────────────────
+  // 1. Extreme aspect ratio — CTA strips are always very wide and very short
+  if (width && height && width / height > 3.5) return "cta";
+  // 2. Alt text starts with a CTA verb ("SHOP MEN", "BUY NOW", etc.)
+  //    Previously `alt.includes("shop")` → "product", which caused CTA buttons
+  //    to appear as the first card image. This is the root cause fix.
+  if (CTA_ALT_PREFIXES.test(altText)) return "cta";
+
+  // ── Banner ────────────────────────────────────────────────────────────────
   if (width && height && width > 400 && height < 200) return "banner";
+
+  // ── Hero (first large image) ──────────────────────────────────────────────
   if (index === 0 && (!width || width >= 400)) return "hero";
 
+  // ── Product ───────────────────────────────────────────────────────────────
+  // Note: "shop" removed from alt check — it matched CTA buttons, not products.
   if (
     alt.includes("product") ||
-    alt.includes("shop") ||
     srcLower.includes("product") ||
     srcLower.includes("/p/") ||
     srcLower.includes("item")
@@ -188,11 +218,12 @@ function classifyImage(
 }
 
 const ROLE_ORDER: Record<RawImage["role"], number> = {
-  hero: 0,
-  banner: 1,
+  hero:    0,
+  banner:  1,
   product: 2,
-  other: 3,
-  logo: 4,
+  other:   3,
+  cta:     4, // sorted last — filtered out before upload
+  logo:    5,
 };
 
 function extractImages(html: string): RawImage[] {
