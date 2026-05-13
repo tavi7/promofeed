@@ -17,8 +17,8 @@ interface Promotion {
   expiry_date: string | null;
   relevance_score: number;
   created_at: string;
+  all_images: string[];
   best_image_url: string | null;
-  all_images: string[] | null;
   source: "email" | "web";
   click_url: string | null;
 }
@@ -28,7 +28,8 @@ interface Promotion {
 const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 60_000;
 const READ_STORAGE_KEY = "promofeed_read";
-const EXCLUDED_BRANDS_COOKIE = "pf_excluded_brands";
+const EXCLUDE_COOKIE = "promofeed_exclude";
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ function markRead(id: string) {
 function getExcludedBrands(): string[] {
   try {
     const match = document.cookie.match(
-      new RegExp(`(?:^|; )${EXCLUDED_BRANDS_COOKIE}=([^;]*)`)
+      new RegExp(`(?:^|; )${EXCLUDE_COOKIE}=([^;]*)`)
     );
     return match ? JSON.parse(decodeURIComponent(match[1])) : [];
   } catch {
@@ -84,112 +85,109 @@ function getExcludedBrands(): string[] {
 }
 
 function saveExcludedBrands(brands: string[]) {
-  const encoded = encodeURIComponent(JSON.stringify(brands));
-  const maxAge = 365 * 24 * 60 * 60;
-  document.cookie = `${EXCLUDED_BRANDS_COOKIE}=${encoded}; max-age=${maxAge}; path=/; SameSite=Lax`;
+  document.cookie = `${EXCLUDE_COOKIE}=${encodeURIComponent(
+    JSON.stringify(brands)
+  )}; max-age=${COOKIE_MAX_AGE}; path=/; SameSite=Lax`;
 }
 
-function excludeParam(brands: string[]) {
-  return brands.length ? `&exclude=${encodeURIComponent(brands.join(","))}` : "";
-}
-
-// ─── ImageCarousel ─────────────────────────────────────────────────────────
+// ─── Image Carousel ────────────────────────────────────────────────────────
 
 function ImageCarousel({ images, title }: { images: string[]; title: string }) {
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [index, setIndex] = useState(0);
+  const [offset, setOffset] = useState(0);
   const touchStartX = useRef<number | null>(null);
-  const touchDeltaX = useRef(0);
+  const isDragging = useRef(false);
 
-  if (images.length === 0) return null;
+  const count = images.length;
 
-  if (images.length === 1) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={images[0]}
-        alt={title}
-        className="w-full max-h-80 object-contain rounded-2xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900"
-      />
-    );
-  }
+  const goTo = (i: number) => setIndex(Math.max(0, Math.min(count - 1, i)));
 
-  const prev = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setActiveIndex((i) => (i - 1 + images.length) % images.length);
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    isDragging.current = false;
+    setOffset(0);
   };
 
-  const next = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setActiveIndex((i) => (i + 1) % images.length);
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const dx = e.touches[0].clientX - touchStartX.current;
+    isDragging.current = Math.abs(dx) > 5;
+    setOffset(dx);
   };
+
+  const onTouchEnd = () => {
+    if (touchStartX.current === null) return;
+    if (offset < -50 && index < count - 1) goTo(index + 1);
+    else if (offset > 50 && index > 0) goTo(index - 1);
+    setOffset(0);
+    touchStartX.current = null;
+  };
+
+  const translateX = -index * 100 + (offset / (typeof window !== "undefined" ? window.innerWidth : 390)) * 100;
+
+  if (count === 0) return null;
 
   return (
-    <div
-      className="relative w-full overflow-hidden rounded-2xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 group"
-      onTouchStart={(e) => {
-        touchStartX.current = e.touches[0].clientX;
-        touchDeltaX.current = 0;
-      }}
-      onTouchMove={(e) => {
-        if (touchStartX.current !== null) {
-          touchDeltaX.current = e.touches[0].clientX - touchStartX.current;
-        }
-      }}
-      onTouchEnd={() => {
-        if (Math.abs(touchDeltaX.current) > 40) {
-          if (touchDeltaX.current < 0) {
-            setActiveIndex((i) => (i + 1) % images.length);
-          } else {
-            setActiveIndex((i) => (i - 1 + images.length) % images.length);
-          }
-        }
-        touchStartX.current = null;
-        touchDeltaX.current = 0;
-      }}
-    >
+    <div className="relative w-full overflow-hidden rounded-xl bg-zinc-900" style={{ aspectRatio: "4/5" }}>
       {/* Slides */}
       <div
-        className="flex transition-transform duration-300 ease-in-out"
-        style={{ transform: `translateX(-${activeIndex * 100}%)` }}
+        className="flex h-full transition-transform duration-300 ease-out"
+        style={{ transform: `translateX(${translateX}%)`, willChange: "transform" }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
       >
         {images.map((url, i) => (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             key={i}
             src={url}
-            alt={`${title} ${i + 1}`}
-            className="w-full flex-shrink-0 max-h-80 object-contain"
+            alt={i === 0 ? title : `${title} image ${i + 1}`}
+            className="flex-shrink-0 w-full h-full object-cover"
+            draggable={false}
           />
         ))}
       </div>
 
-      {/* Arrows — desktop only */}
-      <button
-        onClick={prev}
-        className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none"
-        aria-label="Previous image"
-      >
-        ‹
-      </button>
-      <button
-        onClick={next}
-        className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none"
-        aria-label="Next image"
-      >
-        ›
-      </button>
+      {/* Left/right arrows — desktop only */}
+      {count > 1 && (
+        <>
+          {index > 0 && (
+            <button
+              onClick={(e) => { e.preventDefault(); goTo(index - 1); }}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              aria-label="Previous image"
+            >
+              ‹
+            </button>
+          )}
+          {index < count - 1 && (
+            <button
+              onClick={(e) => { e.preventDefault(); goTo(index + 1); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              aria-label="Next image"
+            >
+              ›
+            </button>
+          )}
+        </>
+      )}
 
-      {/* Dot indicators */}
-      <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1">
-        {images.map((_, i) => (
-          <div
-            key={i}
-            className={`w-1.5 h-1.5 rounded-full transition-colors ${
-              i === activeIndex ? "bg-white" : "bg-white/40"
-            }`}
-          />
-        ))}
-      </div>
+      {/* Dots */}
+      {count > 1 && (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+          {images.map((_, i) => (
+            <button
+              key={i}
+              onClick={(e) => { e.preventDefault(); goTo(i); }}
+              className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                i === index ? "bg-white" : "bg-white/40"
+              }`}
+              aria-label={`Go to image ${i + 1}`}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -205,9 +203,10 @@ function PromotionCard({
   isRead: boolean;
   onRead: (id: string) => void;
 }) {
-  const ref = useRef<HTMLAnchorElement>(null);
+  const ref = useRef<HTMLElement>(null);
   const [logoError, setLogoError] = useState(false);
 
+  // Mark as read after 2s of being 80%+ visible
   useEffect(() => {
     if (isRead) return;
     const el = ref.current;
@@ -224,312 +223,319 @@ function PromotionCard({
       { threshold: 0.8 }
     );
     observer.observe(el);
-    return () => {
-      observer.disconnect();
-      clearTimeout(timer);
-    };
+    return () => { observer.disconnect(); clearTimeout(timer); };
   }, [isRead, promo.id, onRead]);
 
-  // Prefer all_images array; fall back to best_image_url for older rows
   const images = promo.all_images?.length
     ? promo.all_images
     : promo.best_image_url
     ? [promo.best_image_url]
     : [];
 
+  const hasImage = images.length > 0;
+
   return (
-    <a
+    <article
       ref={ref}
-      href={promo.click_url ?? `https://${rootDomain(promo.brand_domain)}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`block border-b border-zinc-100 dark:border-zinc-800 px-4 py-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/40 border-l-2 ${
-        isRead
-          ? "border-l-transparent"
-          : "border-l-blue-400 dark:border-l-blue-500"
+      className={`relative group mb-3 mx-3 rounded-2xl overflow-hidden bg-zinc-900 transition-opacity ${
+        isRead ? "opacity-60" : "opacity-100"
       }`}
     >
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
-        <div className="flex-shrink-0 w-10 h-10 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-          {!logoError ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logoUrl(promo.brand_domain)}
-              alt={promo.brand_name}
-              className="w-10 h-10 object-contain"
-              onError={() => setLogoError(true)}
-            />
-          ) : (
-            <span className="text-sm font-bold text-zinc-500 dark:text-zinc-400 uppercase">
-              {promo.brand_name.charAt(0)}
-            </span>
-          )}
-        </div>
+      <a
+        href={promo.click_url ?? `https://${rootDomain(promo.brand_domain)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block"
+      >
+        {hasImage ? (
+          <>
+            {/* Image carousel — full width, 4:5 portrait */}
+            <ImageCarousel images={images} title={promo.title} />
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate">
-              {promo.brand_name}
-            </span>
-            <span className="text-xs text-zinc-400 dark:text-zinc-500 flex-shrink-0">
-              {timeAgo(promo.created_at)}
-            </span>
-            {promo.source === "web" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-medium flex-shrink-0">
-                web
+            {/* Gradient overlay at bottom of image */}
+            <div className="absolute bottom-0 left-0 right-0 px-3 pt-16 pb-3 bg-gradient-to-t from-black/90 via-black/50 to-transparent pointer-events-none">
+              {/* Brand row */}
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="w-6 h-6 rounded-full overflow-hidden bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                  {!logoError ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={logoUrl(promo.brand_domain)}
+                      alt={promo.brand_name}
+                      className="w-6 h-6 object-contain"
+                      onError={() => setLogoError(true)}
+                    />
+                  ) : (
+                    <span className="text-[10px] font-bold text-zinc-300 uppercase">
+                      {promo.brand_name.charAt(0)}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-white/90 truncate">
+                  {promo.brand_name}
+                </span>
+                <span className="text-[10px] text-white/50 flex-shrink-0">
+                  {timeAgo(promo.created_at)}
+                </span>
+                {/* Unread dot */}
+                {!isRead && (
+                  <span className="ml-auto w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+                )}
+              </div>
+
+              {/* Title */}
+              <p className="text-sm font-semibold text-white leading-snug line-clamp-2">
+                {promo.title}
+              </p>
+
+              {/* Badges */}
+              <div className="flex flex-wrap gap-1.5 mt-1.5 pointer-events-none">
+                {promo.discount_text && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/90 text-white font-medium">
+                    {promo.discount_text}
+                  </span>
+                )}
+                {promo.promo_code && (
+                  <span className="text-[11px] px-2 py-0.5 rounded font-mono bg-white/20 text-white tracking-wider border border-white/30">
+                    {promo.promo_code}
+                  </span>
+                )}
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/70">
+                  {promo.category}
+                </span>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* Text-only card — no image available */
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-full overflow-hidden bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                {!logoError ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={logoUrl(promo.brand_domain)}
+                    alt={promo.brand_name}
+                    className="w-8 h-8 object-contain"
+                    onError={() => setLogoError(true)}
+                  />
+                ) : (
+                  <span className="text-xs font-bold text-zinc-300 uppercase">
+                    {promo.brand_name.charAt(0)}
+                  </span>
+                )}
+              </div>
+              <span className="text-sm font-semibold text-zinc-100 truncate">
+                {promo.brand_name}
               </span>
+              <span className="text-xs text-zinc-500 flex-shrink-0">
+                {timeAgo(promo.created_at)}
+              </span>
+              {!isRead && (
+                <span className="ml-auto w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+              )}
+            </div>
+            <p className="text-sm font-semibold text-zinc-100 leading-snug mb-2">
+              {promo.title}
+            </p>
+            {promo.description && (
+              <p className="text-xs text-zinc-400 leading-relaxed line-clamp-3 mb-2">
+                {promo.description}
+              </p>
             )}
+            <div className="flex flex-wrap gap-1.5">
+              {promo.discount_text && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-medium border border-emerald-500/30">
+                  {promo.discount_text}
+                </span>
+              )}
+              {promo.promo_code && (
+                <span className="text-[11px] px-2 py-0.5 rounded font-mono bg-zinc-800 text-zinc-300 tracking-wider border border-dashed border-zinc-600">
+                  {promo.promo_code}
+                </span>
+              )}
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500">
+                {promo.category}
+              </span>
+            </div>
           </div>
-        </div>
-
-        <div
-          className="flex-shrink-0 w-2 h-2 rounded-full"
-          style={{
-            backgroundColor: `hsl(${(promo.relevance_score - 1) * 12}, 70%, 50%)`,
-          }}
-          title={`Score: ${promo.relevance_score}/10`}
-        />
-      </div>
-
-      {/* Body */}
-      <div className="pl-[52px]">
-        <p className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100 leading-snug mb-1">
-          {promo.title}
-        </p>
-        {promo.description && (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed mb-2">
-            {promo.description}
-          </p>
         )}
-
-        <div className="flex flex-wrap gap-2 mb-3">
-          {promo.discount_text && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 font-medium">
-              {promo.discount_text}
-            </span>
-          )}
-          {promo.promo_code && (
-            <span className="text-xs px-2 py-0.5 rounded font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 tracking-wider border border-dashed border-zinc-300 dark:border-zinc-600">
-              {promo.promo_code}
-            </span>
-          )}
-          {promo.expiry_date && (
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">
-              until {new Date(promo.expiry_date).toLocaleDateString()}
-            </span>
-          )}
-          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-            {promo.category}
-          </span>
-        </div>
-
-        {images.length > 0 && (
-          <ImageCarousel images={images} title={promo.title} />
-        )}
-      </div>
-    </a>
+      </a>
+    </article>
   );
 }
 
-// ─── AddBrandModal ─────────────────────────────────────────────────────────
+// ─── Brand Filter Drawer ───────────────────────────────────────────────────
+
+function BrandDrawer({
+  open,
+  onClose,
+  promotions,
+  excludedBrands,
+  onToggleBrand,
+  onAddBrand,
+}: {
+  open: boolean;
+  onClose: () => void;
+  promotions: Promotion[];
+  excludedBrands: string[];
+  onToggleBrand: (brand: string) => void;
+  onAddBrand: () => void;
+}) {
+  // Unique brands from current feed
+  const brands = Array.from(new Set(promotions.map((p) => p.brand_name))).sort();
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-40 transition-opacity ${
+          open ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={onClose}
+      />
+      {/* Drawer */}
+      <div
+        className={`fixed top-0 right-0 h-full w-72 bg-zinc-950 border-l border-zinc-800 z-50 flex flex-col transition-transform duration-300 ${
+          open ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-4 border-b border-zinc-800">
+          <h2 className="text-sm font-semibold text-zinc-100">Filter Brands</h2>
+          <button
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-100 text-lg leading-none"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1">
+          {brands.map((brand) => {
+            const excluded = excludedBrands.includes(brand);
+            return (
+              <button
+                key={brand}
+                onClick={() => onToggleBrand(brand)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                  excluded
+                    ? "bg-zinc-800/50 text-zinc-500 line-through"
+                    : "bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+                }`}
+              >
+                <span className="truncate">{brand}</span>
+                <span className={`ml-2 flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
+                  excluded
+                    ? "border-zinc-600 bg-zinc-700 text-zinc-400"
+                    : "border-zinc-600"
+                }`}>
+                  {excluded ? "✕" : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-4 py-4 border-t border-zinc-800">
+          <button
+            onClick={onAddBrand}
+            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+          >
+            + Add a Brand
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Add Brand Modal ───────────────────────────────────────────────────────
 
 function AddBrandModal({ onClose }: { onClose: () => void }) {
-  const [input, setInput] = useState("");
-  const [status, setStatus] = useState<
-    "idle" | "checking" | "exists" | "sent" | "error"
-  >("idle");
+  const [name, setName] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "exists">("idle");
 
-  const handleSubmit = async () => {
-    const name = input.trim();
-    if (!name) return;
-    setStatus("checking");
+  const submit = async () => {
+    if (!name.trim()) return;
+    setStatus("loading");
     try {
-      const checkRes = await fetch(
-        `/api/brands?name=${encodeURIComponent(name)}`,
-        { cache: "no-store" }
-      );
+      const checkRes = await fetch(`/api/brands?name=${encodeURIComponent(name.trim())}`);
       const checkData = await checkRes.json();
       if (checkData.exists) {
         setStatus("exists");
         return;
       }
-      const postRes = await fetch("/api/brands", {
+      await fetch("/api/brands", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name: name.trim() }),
       });
-      setStatus(postRes.ok ? "sent" : "error");
+      setStatus("done");
     } catch {
-      setStatus("error");
+      setStatus("idle");
     }
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-2xl p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 mb-1">
-          Add a brand
-        </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
-          We&apos;ll start tracking their promos if they&apos;re not already in the feed.
+    <div className="fixed inset-0 bg-black/70 z-60 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-sm p-5">
+        <h3 className="text-sm font-semibold text-zinc-100 mb-1">Request a Brand</h3>
+        <p className="text-xs text-zinc-500 mb-4">
+          We&apos;ll add it to the feed when possible.
         </p>
 
-        {status === "sent" ? (
-          <div className="text-center py-4">
-            <p className="text-emerald-600 dark:text-emerald-400 font-medium text-sm">
-              ✓ Request sent!
-            </p>
-            <p className="text-zinc-400 text-xs mt-1">We&apos;ll add them soon.</p>
+        {status === "done" ? (
+          <>
+            <p className="text-sm text-emerald-400 mb-4">Request sent! ✓</p>
             <button
               onClick={onClose}
-              className="mt-4 text-xs text-zinc-500 underline"
+              className="w-full py-2.5 rounded-xl bg-zinc-800 text-zinc-200 text-sm"
             >
               Close
             </button>
-          </div>
+          </>
         ) : status === "exists" ? (
-          <div className="text-center py-4">
-            <p className="text-zinc-600 dark:text-zinc-400 text-sm">
-              Already tracking <strong>{input}</strong>.
+          <>
+            <p className="text-sm text-zinc-300 mb-4">
+              <strong>{name}</strong> is already tracked.
             </p>
             <button
               onClick={onClose}
-              className="mt-4 text-xs text-zinc-500 underline"
+              className="w-full py-2.5 rounded-xl bg-zinc-800 text-zinc-200 text-sm"
             >
               Close
             </button>
-          </div>
+          </>
         ) : (
           <>
             <input
               type="text"
-              className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
-              placeholder="e.g. Nike, Zara, ASOS"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSubmit();
-              }}
-              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="Brand name (e.g. Zara)"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none focus:border-blue-500 mb-3"
             />
-            {status === "error" && (
-              <p className="text-xs text-red-500 mb-2">
-                Something went wrong. Try again.
-              </p>
-            )}
             <div className="flex gap-2">
               <button
                 onClick={onClose}
-                className="flex-1 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 text-sm text-zinc-600 dark:text-zinc-400"
+                className="flex-1 py-2.5 rounded-xl bg-zinc-800 text-zinc-300 text-sm"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSubmit}
-                disabled={status === "checking" || !input.trim()}
-                className="flex-1 px-3 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium disabled:opacity-50"
+                onClick={submit}
+                disabled={status === "loading" || !name.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium transition-colors"
               >
-                {status === "checking" ? "Checking…" : "Request"}
+                {status === "loading" ? "Sending…" : "Request"}
               </button>
             </div>
           </>
         )}
       </div>
     </div>
-  );
-}
-
-// ─── Sidebar ───────────────────────────────────────────────────────────────
-
-function Sidebar({
-  open,
-  onClose,
-  excludedBrands,
-  allBrands,
-  onToggleBrand,
-  onAddBrand,
-}: {
-  open: boolean;
-  onClose: () => void;
-  excludedBrands: string[];
-  allBrands: string[];
-  onToggleBrand: (brand: string) => void;
-  onAddBrand: () => void;
-}) {
-  return (
-    <>
-      {open && (
-        <div
-          className="fixed inset-0 z-30 bg-black/40"
-          onClick={onClose}
-        />
-      )}
-      <div
-        className={`fixed top-0 right-0 h-full w-72 z-40 bg-white dark:bg-zinc-900 shadow-xl transform transition-transform duration-300 ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-zinc-100 dark:border-zinc-800">
-          <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
-            Settings
-          </span>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="px-4 py-4 overflow-y-auto h-[calc(100%-57px)]">
-          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-3">
-            Hide brands
-          </p>
-
-          {allBrands.length === 0 ? (
-            <p className="text-xs text-zinc-400">No brands yet.</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {allBrands.map((brand) => {
-                const hidden = excludedBrands.includes(brand);
-                return (
-                  <button
-                    key={brand}
-                    onClick={() => onToggleBrand(brand)}
-                    className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                      hidden
-                        ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 line-through"
-                        : "hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
-                    }`}
-                  >
-                    <span>{brand}</span>
-                    {hidden && (
-                      <span className="text-xs text-zinc-400 no-underline" style={{ textDecoration: "none" }}>
-                        hidden
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <button
-            onClick={onAddBrand}
-            className="mt-6 w-full px-3 py-2 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 text-sm text-zinc-500 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-500 transition-colors"
-          >
-            + Add a brand
-          </button>
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -541,91 +547,78 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [showAddBrand, setShowAddBrand] = useState(false);
-  const [excludedBrands, setExcludedBrandsState] = useState<string[]>([]);
-  const [allBrands, setAllBrands] = useState<string[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addBrandOpen, setAddBrandOpen] = useState(false);
+  const [excludedBrands, setExcludedBrands] = useState<string[]>([]);
 
   const offsetRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
-  // Use created_at timestamp for new-item detection — never stale unlike ID-based index comparison
-  const newestCreatedAtRef = useRef<string | null>(null);
+  const newestIdRef = useRef<string | null>(null);
+
+  // Build URL with exclude param
+  const buildUrl = useCallback(
+    (offset: number, excluded: string[]) => {
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (excluded.length > 0) {
+        params.set("exclude", excluded.join(","));
+      }
+      return `/api/promotions?${params.toString()}`;
+    },
+    []
+  );
 
   const fetchPromotions = useCallback(
-    async (offset: number, append = false, excluded: string[] = []) => {
+    async (offset: number, append: boolean, excluded: string[]) => {
       try {
-        const res = await fetch(
-          `/api/promotions?limit=${PAGE_SIZE}&offset=${offset}${excludeParam(excluded)}`,
-          { cache: "no-store" } // always bypass Next.js + browser cache
-        );
+        const res = await fetch(buildUrl(offset, excluded));
         const data = await res.json();
         const incoming: Promotion[] = data.promotions ?? [];
-
         setPromotions((prev) => (append ? [...prev, ...incoming] : incoming));
         hasMoreRef.current = incoming.length === PAGE_SIZE;
         setHasMore(incoming.length === PAGE_SIZE);
         offsetRef.current = offset + incoming.length;
-
         if (!append && incoming.length > 0) {
-          newestCreatedAtRef.current = incoming[0].created_at;
-          // Build brand list from this page
-          const brands = [...new Set(incoming.map((p) => p.brand_name))].sort();
-          setAllBrands(brands);
+          newestIdRef.current = incoming[0].id;
         }
       } catch (err) {
         console.error("Fetch failed:", err);
       }
     },
-    []
+    [buildUrl]
   );
 
-  // Poll: compare by created_at, not array index — works regardless of sort order
+  // Poll for new items at the top
   const pollForNew = useCallback(async () => {
-    if (!newestCreatedAtRef.current) return;
-    const excluded = getExcludedBrands();
+    if (!newestIdRef.current) return;
     try {
-      const res = await fetch(
-        `/api/promotions?limit=${PAGE_SIZE}&offset=0${excludeParam(excluded)}`,
-        { cache: "no-store" }
-      );
+      const res = await fetch(buildUrl(0, excludedBrands));
       const data = await res.json();
       const incoming: Promotion[] = data.promotions ?? [];
-      const newestAt = newestCreatedAtRef.current;
-
-      const newItems = incoming.filter(
-        (p) => new Date(p.created_at) > new Date(newestAt)
-      );
-
+      const cutoff = incoming.findIndex((x) => x.id === newestIdRef.current);
+      const newItems = cutoff > 0 ? incoming.slice(0, cutoff) : [];
       if (newItems.length > 0) {
-        setPromotions((prev) => {
-          // Dedupe by id in case of any overlap
-          const existingIds = new Set(prev.map((p) => p.id));
-          const fresh = newItems.filter((p) => !existingIds.has(p.id));
-          return [...fresh, ...prev];
-        });
-        newestCreatedAtRef.current = newItems[0].created_at;
+        setPromotions((prev) => [...newItems, ...prev]);
+        newestIdRef.current = newItems[0].id;
         offsetRef.current += newItems.length;
-        // Merge any new brands into the sidebar list
-        setAllBrands((prev) => {
-          const combined = new Set([...prev, ...newItems.map((p) => p.brand_name)]);
-          return [...combined].sort();
-        });
       }
     } catch (err) {
       console.error("Poll failed:", err);
     }
-  }, []);
+  }, [buildUrl, excludedBrands]);
 
-  // Initial load
+  // Initial load — read excluded brands from cookie first
   useEffect(() => {
     const excluded = getExcludedBrands();
-    setExcludedBrandsState(excluded);
+    setExcludedBrands(excluded);
     setRead(getRead());
     fetchPromotions(0, false, excluded).finally(() => setLoading(false));
   }, [fetchPromotions]);
 
-  // Polling interval
+  // Polling
   useEffect(() => {
     const id = setInterval(pollForNew, POLL_INTERVAL_MS);
     return () => clearInterval(id);
@@ -640,69 +633,64 @@ export default function Home() {
     if (loadingMoreRef.current || !hasMoreRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
-    await fetchPromotions(offsetRef.current, true, getExcludedBrands());
+    await fetchPromotions(offsetRef.current, true, excludedBrands);
     loadingMoreRef.current = false;
     setLoadingMore(false);
-  }, [fetchPromotions]);
+  }, [fetchPromotions, excludedBrands]);
 
-  const handleToggleBrand = useCallback(
-    (brand: string) => {
-      setExcludedBrandsState((prev) => {
-        const next = prev.includes(brand)
-          ? prev.filter((b) => b !== brand)
-          : [...prev, brand];
-        saveExcludedBrands(next);
-        // Re-fetch from scratch with updated exclusions
-        offsetRef.current = 0;
-        newestCreatedAtRef.current = null;
-        fetchPromotions(0, false, next);
-        return next;
-      });
-    },
-    [fetchPromotions]
-  );
-
-  // Callback ref — attaches observer only when the sentinel node actually mounts
+  // Infinite scroll — callback ref pattern (attaches after sentinel mounts)
   const sentinelCallback = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (!node) return;
+    (el: HTMLDivElement | null) => {
+      if (!el) return;
       const observer = new IntersectionObserver(
-        ([entry]) => {
-          if (entry.isIntersecting) loadMore();
-        },
+        ([entry]) => { if (entry.isIntersecting) loadMore(); },
         { threshold: 0 }
       );
-      observer.observe(node);
+      observer.observe(el);
     },
     [loadMore]
   );
 
+  // Toggle brand exclusion and reload
+  const handleToggleBrand = useCallback(
+    (brand: string) => {
+      const updated = excludedBrands.includes(brand)
+        ? excludedBrands.filter((b) => b !== brand)
+        : [...excludedBrands, brand];
+      setExcludedBrands(updated);
+      saveExcludedBrands(updated);
+      offsetRef.current = 0;
+      setLoading(true);
+      fetchPromotions(0, false, updated).finally(() => setLoading(false));
+    },
+    [excludedBrands, fetchPromotions]
+  );
+
   return (
-    <div className="min-h-screen bg-white dark:bg-black">
-      <header className="sticky top-0 z-10 bg-white/80 dark:bg-black/80 backdrop-blur border-b border-zinc-100 dark:border-zinc-800 px-4 py-3 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
+    <div className="min-h-screen bg-zinc-950">
+      {/* Sticky dark nav */}
+      <header className="sticky top-0 z-30 bg-zinc-950/90 backdrop-blur border-b border-zinc-800/60 px-4 py-3 flex items-center justify-between">
+        <h1 className="text-base font-bold text-zinc-100 tracking-tight">
           PromoFeed
         </h1>
         <button
-          onClick={() => setSidebarOpen(true)}
-          className="w-8 h-8 flex flex-col justify-center items-center gap-1.5"
+          onClick={() => setDrawerOpen(true)}
+          className="flex flex-col gap-1 p-1"
           aria-label="Open menu"
         >
-          <span className="w-5 h-0.5 bg-zinc-600 dark:bg-zinc-400 rounded" />
-          <span className="w-5 h-0.5 bg-zinc-600 dark:bg-zinc-400 rounded" />
-          <span className="w-5 h-0.5 bg-zinc-600 dark:bg-zinc-400 rounded" />
+          <span className="block w-5 h-px bg-zinc-400" />
+          <span className="block w-5 h-px bg-zinc-400" />
+          <span className="block w-5 h-px bg-zinc-400" />
         </button>
       </header>
 
-      <main className="max-w-xl mx-auto">
+      <main className="max-w-lg mx-auto pt-3 pb-16">
         {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
+          <div className="flex justify-center py-20">
+            <div className="w-6 h-6 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin" />
           </div>
         ) : promotions.length === 0 ? (
-          <p className="text-center text-zinc-400 py-16 text-sm">
-            No promotions yet.
-          </p>
+          <p className="text-center text-zinc-500 py-20 text-sm">No promotions yet.</p>
         ) : (
           <>
             {promotions.map((p) => (
@@ -718,12 +706,12 @@ export default function Home() {
 
             {loadingMore && (
               <div className="flex justify-center py-4">
-                <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
+                <div className="w-5 h-5 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin" />
               </div>
             )}
 
             {!hasMore && (
-              <p className="text-center text-zinc-400 py-6 text-xs">
+              <p className="text-center text-zinc-600 py-6 text-xs">
                 You&apos;re all caught up
               </p>
             )}
@@ -731,20 +719,17 @@ export default function Home() {
         )}
       </main>
 
-      <Sidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+      <BrandDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        promotions={promotions}
         excludedBrands={excludedBrands}
-        allBrands={allBrands}
         onToggleBrand={handleToggleBrand}
-        onAddBrand={() => {
-          setSidebarOpen(false);
-          setShowAddBrand(true);
-        }}
+        onAddBrand={() => { setDrawerOpen(false); setAddBrandOpen(true); }}
       />
 
-      {showAddBrand && (
-        <AddBrandModal onClose={() => setShowAddBrand(false)} />
+      {addBrandOpen && (
+        <AddBrandModal onClose={() => setAddBrandOpen(false)} />
       )}
     </div>
   );
