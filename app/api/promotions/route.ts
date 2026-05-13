@@ -1,8 +1,7 @@
 // app/api/promotions/route.ts
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { ROLE_PRIORITY, shouldSkipImage } from "../../lib/parser/imageFilters";
-
+import { ROLE_PRIORITY, shouldSkipImage } from "../../../lib/parser/imageFilters";
 export const dynamic = "force-dynamic";
 
 // Server-side only — service role key is never sent to the browser
